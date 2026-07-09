@@ -265,12 +265,9 @@ function syncPlayers(players) {
       state.scene.add(ch);
       state.characters.set(p.id, ch);
     }
-    // Local player: we predict transform while playing, but KEEP visible (3rd person)
+    // Local player in FPS: hide body (you look through their eyes)
     if (p.id === myId && state.playing && !state.droneMode) {
-      ch.visible = !!p.alive;
-      ch.scale.set(1.2, 1.2, 1.2);
-      if (ch.userData.youMarker) ch.userData.youMarker.visible = true;
-      // Still sync weapon mesh
+      ch.visible = false;
       const mount = ch.userData.weaponMount;
       const wid = p.weapon?.id;
       if (wid && wid !== 'FIST' && mount.userData.wid !== wid) {
@@ -286,13 +283,14 @@ function syncPlayers(players) {
     ch.position.set(p.x, p.y, p.z);
     ch.rotation.y = p.yaw;
     ch.visible = p.alive;
-    if (p.id === myId) {
+    if (p.id === myId && state.droneMode) {
       ch.scale.set(1.35, 1.35, 1.35);
+      if (ch.userData.youMarker) ch.userData.youMarker.visible = true;
     } else {
       ch.scale.set(1, 1, 1);
+      if (p.id !== myId && ch.userData.youMarker) ch.userData.youMarker.visible = false;
     }
     if (p.prone) animateCharacter(ch, false, 0, true);
-    // Weapon mesh
     const mount = ch.userData.weaponMount;
     const wid = p.weapon?.id;
     if (wid && wid !== 'FIST' && mount.userData.wid !== wid) {
@@ -346,13 +344,12 @@ function startDroneView(snap) {
   state.controls.enabled = false;
   setHud(true);
   $('drone-banner').classList.remove('hidden');
-  $('drone-banner').textContent = 'CAMERA TOÀN CẢNH — Chạm / click để VÀO TRẬN';
+  $('drone-banner').textContent = 'DRONE INTRO — Chạm để VÀO NHÂN VẬT (FPS như CS:GO)';
   $('countdown-overlay').classList.add('hidden');
   syncPlayers(snap.players);
   syncCrates(snap.crates);
   const me = snap.players.find((p) => p.id === myId);
   localPlayer = me ? { ...me } : null;
-  // Highlight "you" during drone overview
   for (const [id, ch] of state.characters) {
     ch.visible = true;
     if (id === myId) {
@@ -364,19 +361,20 @@ function startDroneView(snap) {
     }
   }
   updateHudFromPlayer(localPlayer, snap);
-  msg('Bạn = nhân vật CT (vòng xanh + mũi tên vàng) · Chạm màn hình để vào trận', 5000);
+  msg('Sắp nhập vai CT (mũi tên vàng) — góc nhìn ngôi thứ nhất như CS:GO', 4000);
 }
 
 function startPlaying(snap) {
   state.droneMode = false;
   state.playing = true;
+  state.thirdPerson = false;
   state.controls.enabled = true;
   state.controls.scopeLevel = 0;
   state.controls.ads = false;
   state.combatReady = false;
-  state.thirdPerson = true; // thấy nhân vật chính của mình
   $('drone-banner').classList.add('hidden');
   setHud(true);
+  $('crosshair')?.classList.remove('hidden');
   syncPlayers(snap.players);
   syncCrates(snap.crates);
   const me = snap.players.find((p) => p.id === myId);
@@ -389,15 +387,22 @@ function startPlaying(snap) {
       weapon: me.weapon,
     };
   }
-  // Keep local character VISIBLE (third-person) + you-marker
+  // FPS: hide own body — you ARE this character
   const myChar = state.characters.get(myId);
   if (myChar) {
-    myChar.visible = true;
-    myChar.scale.set(1.2, 1.2, 1.2);
-    if (myChar.userData.youMarker) myChar.userData.youMarker.visible = true;
+    myChar.visible = false;
+    if (myChar.userData.youMarker) myChar.userData.youMarker.visible = false;
   }
+  if (state.viewmodel) state.viewmodel.visible = true;
+  updateViewmodel(localPlayer);
 
-  // Countdown — cả hai bên vào cùng lúc sau 3-2-1
+  // Request pointer lock immediately (CS:GO mouse look)
+  try {
+    if (!('ontouchstart' in window)) {
+      document.getElementById('game-canvas')?.requestPointerLock?.();
+    }
+  } catch (_) {}
+
   let n = 3;
   $('countdown-overlay').classList.remove('hidden');
   $('countdown-num').textContent = n;
@@ -408,10 +413,16 @@ function startPlaying(snap) {
       $('countdown-overlay').classList.add('hidden');
       state.combatReady = true;
       if (snap.soloMode) {
-        msg('ĐÂY LÀ BẠN (mũi tên vàng) — Bot tay không · V đổi súng!', 4000);
+        msg('BẠN ĐANG ĐIỀU KHIỂN NHÂN VẬT — WASD + chuột · V đổi súng', 4000);
       } else {
         msg(localPlayer?.team === 'CT' ? 'BẢO VỆ — Tiêu diệt Terrorist!' : 'TẤN CÔNG — Tiêu diệt CT!', 3000);
       }
+      // Re-request lock after countdown
+      try {
+        if (!('ontouchstart' in window)) {
+          document.getElementById('game-canvas')?.requestPointerLock?.();
+        }
+      } catch (_) {}
     } else {
       $('countdown-num').textContent = n;
     }
@@ -454,20 +465,9 @@ function wireSocketEvents(sock) {
         }
       }
       syncPlayers(data.players);
-      if (localPlayer && state.playing) {
+      if (localPlayer && state.playing && !state.droneMode) {
         const ch = state.characters.get(myId);
-        if (ch) {
-          // Don't overwrite predicted position — only ensure visible
-          ch.visible = !!localPlayer.alive;
-          if (ch.userData.youMarker) ch.userData.youMarker.visible = true;
-          const mount = ch.userData.weaponMount;
-          const wid = localPlayer.weapon?.id;
-          if (wid && wid !== 'FIST' && mount.userData.wid !== wid) {
-            while (mount.children.length) mount.remove(mount.children[0]);
-            mount.add(createWeaponMesh(wid));
-            mount.userData.wid = wid;
-          }
-        }
+        if (ch) ch.visible = false;
       }
     }
     if (data.crates) syncCrates(data.crates);
@@ -691,37 +691,31 @@ function updateLocal(dt) {
   localPlayer.x = pos.x;
   localPlayer.z = pos.z;
 
-  // Character visual — third-person: KEEP own body visible with "YOU" marker
+  // Character body hidden in FPS — you look through their eyes
   const ch = state.characters.get(myId);
   if (ch) {
     ch.position.set(localPlayer.x, localPlayer.y, localPlayer.z);
     ch.rotation.y = localPlayer.yaw;
     animateCharacter(ch, !!(mx || my), dt, localPlayer.prone);
-    ch.visible = true;
-    ch.scale.set(1.2, 1.2, 1.2);
-    if (ch.userData.youMarker) ch.userData.youMarker.visible = true;
+    ch.visible = false;
   }
 
-  // Camera: third-person over-shoulder so you always see YOUR character
+  // CS:GO first-person camera
   const eye = localPlayer.prone ? 0.45 : 1.65;
   state.eyeHeight = eye;
-  const back = 4.2;
-  const height = localPlayer.prone ? 2.2 : 3.0;
-  const camX = localPlayer.x - Math.sin(localPlayer.yaw) * back;
-  const camZ = localPlayer.z - Math.cos(localPlayer.yaw) * back;
-  const camY = localPlayer.y + height;
-  state.camera.position.set(camX, camY, camZ);
+  state.camera.position.set(localPlayer.x, localPlayer.y + eye, localPlayer.z);
   const lookAt = new THREE.Vector3(
-    localPlayer.x + Math.sin(localPlayer.yaw) * Math.cos(localPlayer.pitch) * 8,
-    localPlayer.y + eye + Math.sin(localPlayer.pitch) * 4,
-    localPlayer.z + Math.cos(localPlayer.yaw) * Math.cos(localPlayer.pitch) * 8
+    localPlayer.x + Math.sin(localPlayer.yaw) * Math.cos(localPlayer.pitch),
+    localPlayer.y + eye + Math.sin(localPlayer.pitch),
+    localPlayer.z + Math.cos(localPlayer.yaw) * Math.cos(localPlayer.pitch)
   );
   state.camera.lookAt(lookAt);
-  state.camera.fov = ctrl.fovForScope(70);
+  state.camera.fov = ctrl.fovForScope(75);
   state.camera.updateProjectionMatrix();
 
-  // Hide FPS viewmodel in third-person (character holds the gun)
-  if (state.viewmodel) state.viewmodel.visible = false;
+  // Gun in hands (FPS viewmodel)
+  if (state.viewmodel) state.viewmodel.visible = true;
+  updateViewmodel(localPlayer);
 
   // Actions
   if (ctrl.consumePress('reload') && localPlayer.weapon) {
@@ -829,11 +823,23 @@ function toggleDronePeek() {
   state.droneMode = !state.droneMode;
   if (state.droneMode) {
     $('drone-banner').classList.remove('hidden');
-    $('drone-banner').textContent = 'CAMERA TOÀN CẢNH — Nhấn Drone để quay lại';
+    $('drone-banner').textContent = 'CAMERA TOÀN CẢNH — Nhấn Drone để quay lại FPS';
     state.controls.enabled = false;
+    const ch = state.characters.get(myId);
+    if (ch) {
+      ch.visible = true;
+      if (ch.userData.youMarker) ch.userData.youMarker.visible = true;
+    }
+    if (state.viewmodel) state.viewmodel.visible = false;
   } else {
     $('drone-banner').classList.add('hidden');
     state.controls.enabled = true;
+    const ch = state.characters.get(myId);
+    if (ch) ch.visible = false;
+    if (state.viewmodel) state.viewmodel.visible = true;
+    try {
+      document.getElementById('game-canvas')?.requestPointerLock?.();
+    } catch (_) {}
   }
 }
 
