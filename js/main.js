@@ -3,6 +3,7 @@ import { buildMap, createSky, resolveCollision } from './map.js';
 import { createCharacter, createWeaponMesh, animateCharacter, createWeaponCrate } from './character.js';
 import { Controls } from './controls.js';
 import { WEAPONS } from './weapons.js';
+import { createLocalSocket } from './localServer.js';
 
 const canvas = document.getElementById('game-canvas');
 const $ = (id) => document.getElementById(id);
@@ -305,144 +306,181 @@ function startPlaying(snap) {
 }
 
 // ——— Networking ———
+function wireSocketEvents(sock) {
+  sock.on('room:update', (snap) => updateLobbyUI(snap));
+  sock.on('chat', addChat);
+
+  sock.on('round:drone', (snap) => {
+    document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
+    room = snap;
+    startDroneView(snap);
+  });
+
+  sock.on('round:start', (snap) => {
+    room = snap;
+    startPlaying(snap);
+  });
+
+  sock.on('game:tick', (data) => {
+    if (!state.playing && !state.droneMode) return;
+    if (room) {
+      room.timer = data.timer;
+      if (data.players) room.players = data.players;
+      if (data.crates) room.crates = data.crates;
+    }
+    if (data.players) {
+      for (const p of data.players) {
+        if (p.id === myId && localPlayer) {
+          localPlayer.hp = p.hp;
+          localPlayer.alive = p.alive;
+          if (p.weapon) localPlayer.weapon = p.weapon;
+          if (p.loadout) localPlayer.loadout = p.loadout;
+          localPlayer.kills = p.kills;
+          localPlayer.deaths = p.deaths;
+        }
+      }
+      syncPlayers(data.players);
+      if (localPlayer && state.playing) {
+        const ch = state.characters.get(myId);
+        if (ch) {
+          ch.position.set(localPlayer.x, localPlayer.y, localPlayer.z);
+          ch.rotation.y = localPlayer.yaw;
+          ch.visible = localPlayer.alive;
+          animateCharacter(ch, false, 0, localPlayer.prone);
+          const mount = ch.userData.weaponMount;
+          const wid = localPlayer.weapon?.id;
+          if (wid && mount.userData.wid !== wid) {
+            while (mount.children.length) mount.remove(mount.children[0]);
+            mount.add(createWeaponMesh(wid));
+            mount.userData.wid = wid;
+          }
+        }
+      }
+    }
+    if (data.crates) syncCrates(data.crates);
+    updateHudFromPlayer(localPlayer, { ...room, timer: data.timer, players: data.players, scores: room?.scores });
+    if (room) room.timer = data.timer;
+  });
+
+  sock.on('crate:picked', (r) => {
+    if (r.playerId === myId && localPlayer) {
+      if (r.loadout) localPlayer.loadout = r.loadout;
+      localPlayer.weapon = localPlayer.loadout?.slots?.[localPlayer.loadout.active]
+        || {
+          id: r.weaponId,
+          clip: WEAPONS[r.weaponId].clipSize,
+          reserve: WEAPONS[r.weaponId].reserve,
+          lastShot: 0,
+          reloading: false,
+        };
+      msg(`Nhặt được ${WEAPONS[r.weaponId].name}!`, 2000);
+      updateHudFromPlayer(localPlayer, room);
+    }
+  });
+
+  sock.on('weapon:switch', (r) => {
+    if (r.playerId === myId && localPlayer) {
+      if (localPlayer.loadout) localPlayer.loadout.active = r.active;
+      localPlayer.weapon = localPlayer.loadout?.slots?.[r.active] || localPlayer.weapon;
+      if (localPlayer.weapon) localPlayer.weapon.id = r.weaponId;
+      msg(`Đổi sang ${WEAPONS[r.weaponId]?.name || r.weaponId}`, 1200);
+      updateHudFromPlayer(localPlayer, room);
+    }
+  });
+
+  sock.on('shot', (result) => {
+    spawnTracer(result.origin, result.dir);
+    if (result.hit && result.hit.id === myId && localPlayer) {
+      localPlayer.hp = result.hit.hp;
+      if (result.killed) {
+        localPlayer.alive = false;
+        msg('Bạn đã bị hạ!', 3000);
+      }
+      updateHudFromPlayer(localPlayer, room);
+    }
+  });
+
+  sock.on('kill', (k) => {
+    const feed = $('kill-feed');
+    const line = document.createElement('div');
+    line.className = 'kill-line';
+    line.textContent = `${k.killer} [${k.weaponId}] ${k.victim}`;
+    feed.prepend(line);
+    setTimeout(() => line.remove(), 4000);
+  });
+
+  sock.on('reload', (r) => {
+    if (r.playerId === myId) msg('Đang nạp đạn...', r.duration * 1000);
+  });
+
+  sock.on('round:end', (data) => {
+    state.playing = false;
+    state.controls.enabled = false;
+    document.exitPointerLock?.();
+    const title = data.winner === 'CT' ? 'CT THẮNG!' : 'TERRORIST THẮNG!';
+    $('result-title').textContent = title;
+    $('result-detail').textContent =
+      data.winner === 'CT'
+        ? 'Counter-Terrorist đã bảo vệ thành công / hết giờ.'
+        : 'Terrorist đã tiêu diệt toàn bộ CT.';
+    $('result-overlay').classList.remove('hidden');
+    setHud(false);
+  });
+}
+
+function useLocalMode(reason) {
+  socket = createLocalSocket();
+  myId = socket.id;
+  wireSocketEvents(socket);
+  $('conn-status').textContent = reason || 'Chế độ offline (bot) — sẵn sàng';
+  return Promise.resolve();
+}
+
 function connectSocket() {
   return new Promise((resolve, reject) => {
-    const url = window.GAME_SERVER_URL || undefined;
-    socket = io(url, { transports: ['websocket', 'polling'] });
-    socket.on('connect', () => {
+    const url = (window.GAME_SERVER_URL || '').trim();
+
+    // No remote server configured (typical on Vercel static) → offline bots
+    if (!url && typeof io === 'undefined') {
+      useLocalMode('Chế độ offline — chơi bot không cần server').then(resolve);
+      return;
+    }
+
+    if (!url) {
+      // Same-origin: try local Node server first, fall back to offline
+      try {
+        socket = io({ transports: ['websocket', 'polling'], timeout: 2500, reconnection: false });
+      } catch (e) {
+        useLocalMode('Chế độ offline — chơi bot').then(resolve);
+        return;
+      }
+    } else {
+      if (typeof io === 'undefined') {
+        useLocalMode('Thiếu Socket.io client — dùng offline bot').then(resolve);
+        return;
+      }
+      socket = io(url, { transports: ['websocket', 'polling'], timeout: 4000, reconnection: false });
+    }
+
+    let settled = false;
+    const ok = () => {
+      if (settled) return;
+      settled = true;
       myId = socket.id;
-      $('conn-status').textContent = 'Đã kết nối';
+      wireSocketEvents(socket);
+      $('conn-status').textContent = 'Đã kết nối server';
       resolve();
-    });
-    socket.on('connect_error', (e) => {
-      $('conn-status').textContent = 'Lỗi kết nối server';
-      reject(e);
-    });
+    };
+    const fail = () => {
+      if (settled) return;
+      settled = true;
+      try { socket.disconnect(); } catch (_) {}
+      useLocalMode('Không có game server — chạy bot offline').then(resolve);
+    };
 
-    socket.on('room:update', (snap) => {
-      updateLobbyUI(snap);
-    });
-
-    socket.on('chat', addChat);
-
-    socket.on('round:drone', (snap) => {
-      document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
-      room = snap;
-      startDroneView(snap);
-    });
-
-    socket.on('round:start', (snap) => {
-      room = snap;
-      startPlaying(snap);
-    });
-
-    socket.on('game:tick', (data) => {
-      if (!state.playing && !state.droneMode) return;
-      if (room) {
-        room.timer = data.timer;
-        if (data.players) room.players = data.players;
-        if (data.crates) room.crates = data.crates;
-      }
-      // Update remote players & crates
-      if (data.players) {
-        for (const p of data.players) {
-          if (p.id === myId && localPlayer) {
-            localPlayer.hp = p.hp;
-            localPlayer.alive = p.alive;
-            if (p.weapon) localPlayer.weapon = p.weapon;
-            if (p.loadout) localPlayer.loadout = p.loadout;
-            localPlayer.kills = p.kills;
-            localPlayer.deaths = p.deaths;
-          }
-        }
-        syncPlayers(data.players);
-        // Re-apply local transform after sync skipped us
-        if (localPlayer && state.playing) {
-          const ch = state.characters.get(myId);
-          if (ch) {
-            ch.position.set(localPlayer.x, localPlayer.y, localPlayer.z);
-            ch.rotation.y = localPlayer.yaw;
-            ch.visible = localPlayer.alive;
-            animateCharacter(ch, false, 0, localPlayer.prone);
-            const mount = ch.userData.weaponMount;
-            const wid = localPlayer.weapon?.id;
-            if (wid && mount.userData.wid !== wid) {
-              while (mount.children.length) mount.remove(mount.children[0]);
-              mount.add(createWeaponMesh(wid));
-              mount.userData.wid = wid;
-            }
-          }
-        }
-      }
-      if (data.crates) syncCrates(data.crates);
-      updateHudFromPlayer(localPlayer, { ...room, timer: data.timer, players: data.players, scores: room?.scores });
-      if (room) room.timer = data.timer;
-    });
-
-    socket.on('crate:picked', (r) => {
-      if (r.playerId === myId && localPlayer) {
-        if (r.loadout) localPlayer.loadout = r.loadout;
-        localPlayer.weapon = localPlayer.loadout?.slots?.[localPlayer.loadout.active]
-          || {
-            id: r.weaponId,
-            clip: WEAPONS[r.weaponId].clipSize,
-            reserve: WEAPONS[r.weaponId].reserve,
-            lastShot: 0,
-            reloading: false,
-          };
-        msg(`Nhặt được ${WEAPONS[r.weaponId].name}!`, 2000);
-        updateHudFromPlayer(localPlayer, room);
-      }
-    });
-
-    socket.on('weapon:switch', (r) => {
-      if (r.playerId === myId && localPlayer) {
-        if (localPlayer.loadout) localPlayer.loadout.active = r.active;
-        localPlayer.weapon = localPlayer.loadout?.slots?.[r.active] || localPlayer.weapon;
-        if (localPlayer.weapon) localPlayer.weapon.id = r.weaponId;
-        msg(`Đổi sang ${WEAPONS[r.weaponId]?.name || r.weaponId}`, 1200);
-        updateHudFromPlayer(localPlayer, room);
-      }
-    });
-
-    socket.on('shot', (result) => {
-      spawnTracer(result.origin, result.dir);
-      if (result.hit && result.hit.id === myId && localPlayer) {
-        localPlayer.hp = result.hit.hp;
-        if (result.killed) {
-          localPlayer.alive = false;
-          msg('Bạn đã bị hạ!', 3000);
-        }
-        updateHudFromPlayer(localPlayer, room);
-      }
-    });
-
-    socket.on('kill', (k) => {
-      const feed = $('kill-feed');
-      const line = document.createElement('div');
-      line.className = 'kill-line';
-      line.textContent = `${k.killer} [${k.weaponId}] ${k.victim}`;
-      feed.prepend(line);
-      setTimeout(() => line.remove(), 4000);
-    });
-
-    socket.on('reload', (r) => {
-      if (r.playerId === myId) msg('Đang nạp đạn...', r.duration * 1000);
-    });
-
-    socket.on('round:end', (data) => {
-      state.playing = false;
-      state.controls.enabled = false;
-      document.exitPointerLock?.();
-      const title = data.winner === 'CT' ? 'CT THẮNG!' : 'TERRORIST THẮNG!';
-      $('result-title').textContent = title;
-      $('result-detail').textContent =
-        data.winner === 'CT'
-          ? 'Counter-Terrorist đã bảo vệ thành công / hết giờ.'
-          : 'Terrorist đã tiêu diệt toàn bộ CT.';
-      $('result-overlay').classList.remove('hidden');
-      setHud(false);
-    });
+    socket.on('connect', ok);
+    socket.on('connect_error', fail);
+    setTimeout(fail, 3000);
   });
 }
 
@@ -880,6 +918,16 @@ function ensureConnected() {
   connecting = connectSocket().finally(() => { connecting = null; });
   return connecting;
 }
+
+// Prefetch offline-ready status on menu
+setTimeout(() => {
+  if (!socket && $('conn-status') && !$('conn-status').textContent) {
+    const hasRemote = !!(window.GAME_SERVER_URL || '').trim();
+    if (!hasRemote) {
+      $('conn-status').textContent = 'Sẵn sàng chơi bot (offline / Vercel)';
+    }
+  }
+}, 300);
 
 // ——— Boot ———
 bindUI();

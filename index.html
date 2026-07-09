@@ -29,6 +29,7 @@
         <button id="btn-join-room" class="btn">Vào Phòng</button>
       </div>
       <p class="kb-hint">PC: WASD · Space Nhảy · Shift Chạy · LMB Bắn · RMB/G Ngắm · R Nạp · Q Nhặt · V Đổi súng · C Nằm</p>
+      <p class="kb-hint" style="margin-top:6px;opacity:0.75">Trên Vercel: bấm <b>1 đấu 10 Bot</b> hoặc <b>Bot 5v5</b> (chạy offline). Online cần server riêng.</p>
       <p id="conn-status" class="conn-status"></p>
     </div>
   </div>
@@ -155,31 +156,25 @@
   <canvas id="game-canvas"></canvas>
 
   <script src="server-config.js"></script>
-  <script src="/socket.io/socket.io.js"></script>
+  <!-- Socket.io client from CDN (works on Vercel static hosting) -->
+  <script src="https://cdn.socket.io/4.8.1/socket.io.min.js" crossorigin="anonymous"></script>
   <script>
-    // Guard: must be served by `npm start`, not opened as a local file
     (function () {
       if (location.protocol === 'file:') {
         document.body.innerHTML = '<div style="font-family:sans-serif;padding:40px;max-width:560px;margin:40px auto;background:#12253f;color:#fff;border-radius:8px">' +
           '<h1>Sai cách mở game</h1>' +
           '<p>Không mở <code>index.html</code> trực tiếp.</p>' +
-          '<ol><li>Mở Terminal trong thư mục game</li>' +
-          '<li>Chạy <code>npm install</code></li>' +
-          '<li>Chạy <code>npm start</code></li>' +
-          '<li>Mở trình duyệt: <b>http://localhost:3000</b></li></ol></div>';
-        return;
-      }
-      if (typeof io === 'undefined') {
-        var s = document.getElementById('conn-status');
-        if (s) s.textContent = 'Thiếu Socket.io — hãy chạy npm start trong thư mục có package.json';
+          '<ol><li>Deploy lên Vercel / hoặc</li>' +
+          '<li>Chạy <code>npm install && npm start</code></li>' +
+          '<li>Mở <b>http://localhost:3000</b></li></ol></div>';
       }
     })();
   </script>
   <script type="importmap">
   {
     "imports": {
-      "three": "/node_modules/three/build/three.module.js",
-      "three/addons/": "/node_modules/three/examples/jsm/"
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
     }
   }
   </script>
