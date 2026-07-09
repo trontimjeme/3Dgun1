@@ -67,17 +67,6 @@ export function createLocalSocket() {
     tickInterval = droneTimer = startTimer = null;
   }
 
-  function beginRoundFlow() {
-    clearTimers();
-    // Skip drone — vào FPS ngay để nhập vai nhân vật
-    room.startRound(SPAWNS, CRATE_SPOTS);
-    if (room.beginPlaying()) {
-      room.combatAt = Date.now() + 2100;
-      emitLocal('round:start', room.snapshot());
-      startTick();
-    }
-  }
-
   function startTick() {
     if (tickInterval) clearInterval(tickInterval);
     tickInterval = setInterval(() => {
@@ -108,12 +97,24 @@ export function createLocalSocket() {
         timer: room.timer,
         players: room.snapshot().players,
         crates: room.crates,
+        state: room.state,
       });
     }, 100);
   }
 
+  /** Start match immediately and return a playable snapshot (spawns + weapons). */
+  function startMatchNow() {
+    clearTimers();
+    room.startRound(SPAWNS, CRATE_SPOTS);
+    room.beginPlaying();
+    room.combatAt = Date.now() + 2100;
+    startTick();
+    return room.snapshot();
+  }
+
   function handle(event, data, cb) {
     if (event === 'room:bot') {
+      clearTimers();
       const code = createRoomCode();
       room = new GameRoom(code, id);
       if (data?.mode === 'solo10') {
@@ -125,9 +126,10 @@ export function createLocalSocket() {
         const me = room.players.get(id);
         if (me) me.ready = true;
       }
-      cb?.({ ok: true, room: room.snapshot() });
-      emitLocal('room:update', room.snapshot());
-      droneTimer = setTimeout(beginRoundFlow, 50);
+      // Critical: start round BEFORE ack so client can enter FPS in the same click handler
+      const snap = startMatchNow();
+      emitLocal('round:start', snap);
+      cb?.({ ok: true, room: snap });
       return;
     }
 
