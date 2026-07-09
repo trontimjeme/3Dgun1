@@ -356,24 +356,70 @@ function findMe(players) {
   return players[0];
 }
 
+/** Bind or refresh localPlayer from the latest room snapshot. */
+function ensureLocalPlayer(players) {
+  const list = players || room?.players;
+  const me = findMe(list);
+  if (!me) return null;
+
+  if (!localPlayer || localPlayer.id !== me.id) {
+    myId = me.id;
+    localPlayer = {
+      ...me,
+      x: Number.isFinite(me.x) ? me.x : 0,
+      y: me.y || 0,
+      z: Number.isFinite(me.z) ? me.z : 14,
+      yaw: Number.isFinite(me.yaw) ? me.yaw : Math.PI,
+      pitch: me.pitch || 0,
+      loadout: me.loadout,
+      weapon: me.weapon,
+      ads: false,
+      prone: me.prone || false,
+      sprinting: false,
+      alive: me.alive !== false,
+    };
+  } else {
+    localPlayer.hp = me.hp;
+    localPlayer.alive = me.alive;
+    if (me.weapon) localPlayer.weapon = me.weapon;
+    if (me.loadout) localPlayer.loadout = me.loadout;
+    if (Number.isFinite(me.x)) localPlayer.x = me.x;
+    if (Number.isFinite(me.y)) localPlayer.y = me.y;
+    if (Number.isFinite(me.z)) localPlayer.z = me.z;
+    if (Number.isFinite(me.yaw)) localPlayer.yaw = me.yaw;
+    if (me.pitch != null) localPlayer.pitch = me.pitch;
+  }
+  return localPlayer;
+}
+
 function applyFpsCamera() {
-  if (!localPlayer || !state.camera) return;
-  const eye = localPlayer.prone ? 0.45 : 1.65;
+  if (!state.camera) return;
+  const p = ensureLocalPlayer();
+  if (!p) return;
+
+  const eye = p.prone ? 0.45 : 1.65;
   state.eyeHeight = eye;
-  const yaw = localPlayer.yaw || 0;
-  const pitch = localPlayer.pitch || 0;
-  // Character eye-level POV — look along the same forward used for movement
-  state.camera.position.set(localPlayer.x, (localPlayer.y || 0) + eye, localPlayer.z);
-  state.camera.lookAt(
-    localPlayer.x + Math.sin(yaw) * Math.cos(pitch),
-    (localPlayer.y || 0) + eye + Math.sin(pitch),
-    localPlayer.z + Math.cos(yaw) * Math.cos(pitch)
-  );
+  const yaw = p.yaw || 0;
+  const pitch = p.pitch || 0;
+  const py = p.y || 0;
+
+  // FPS: camera stays OUTSIDE scene graph (never parented to scene)
+  state.camera.position.set(p.x, py + eye, p.z);
+  state.camera.rotation.order = 'YXZ';
+  state.camera.rotation.y = yaw;
+  state.camera.rotation.x = pitch;
+  state.camera.rotation.z = 0;
+  state.camera.updateMatrixWorld(true);
+
   const fov = state.controls?.fovForScope?.(75) ?? 75;
   if (Math.abs(state.camera.fov - fov) > 0.01) {
     state.camera.fov = fov;
     state.camera.updateProjectionMatrix();
   }
+}
+
+function isStuckSpectatorView() {
+  return state.camera && state.camera.position.y > 6;
 }
 
 function showLegoControls() {
@@ -397,44 +443,29 @@ function startPlaying(snap) {
   if (!ensureThree()) return;
   if (!snap) return;
 
+  const me = findMe(snap.players);
+  if (!me) {
+    console.error('No local player', { myId, players: snap.players });
+    state.playing = false;
+    msg('Lỗi: không tìm thấy nhân vật của bạn', 5000);
+    return;
+  }
+
   // Already in character POV for this match — refresh HUD/camera only
   if (state.playing && localPlayer && !state.droneMode) {
     room = snap;
+    state.screen = 'playing';
     state.droneMode = false;
     if (state.controls) state.controls.enabled = true;
     showLegoControls();
+    ensureLocalPlayer(snap.players);
     applyFpsCamera();
     updateViewmodel(localPlayer);
     updateHudFromPlayer(localPlayer, snap);
     return;
   }
 
-  // Force character POV — never stay in spectator/drone
-  state.droneMode = false;
-  state.playing = true;
-  state.thirdPerson = false;
-  if (state.controls) {
-    state.controls.enabled = true;
-    state.controls.scopeLevel = 0;
-    state.controls.ads = false;
-  }
-  state.combatReady = false;
-
-  document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
-  $('click-hint')?.classList.add('hidden');
-  $('result-overlay')?.classList.add('hidden');
-  showLegoControls();
-
   room = snap;
-  syncPlayers(snap.players || []);
-  syncCrates(snap.crates || []);
-
-  const me = findMe(snap.players);
-  if (!me) {
-    console.error('No local player', { myId, players: snap.players });
-    msg('Lỗi: không tìm thấy nhân vật của bạn', 5000);
-    return;
-  }
   myId = me.id;
   localPlayer = {
     ...me,
@@ -450,6 +481,26 @@ function startPlaying(snap) {
     sprinting: false,
     alive: me.alive !== false,
   };
+
+  // Only mark "playing" after we have a controllable character
+  state.droneMode = false;
+  state.playing = true;
+  state.screen = 'playing';
+  state.thirdPerson = false;
+  if (state.controls) {
+    state.controls.enabled = true;
+    state.controls.scopeLevel = 0;
+    state.controls.ads = false;
+  }
+  state.combatReady = false;
+
+  document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
+  $('click-hint')?.classList.add('hidden');
+  $('result-overlay')?.classList.add('hidden');
+  showLegoControls();
+
+  syncPlayers(snap.players || []);
+  syncCrates(snap.crates || []);
 
   for (const [id, ch] of state.characters) {
     if (id === myId) {
@@ -468,7 +519,6 @@ function startPlaying(snap) {
     $('click-hint')?.classList.remove('hidden');
   }
 
-  // Avoid stacking multiple countdowns if startPlaying is called twice
   if (state._countdownIv) clearInterval(state._countdownIv);
   let n = 3;
   $('countdown-overlay').classList.remove('hidden');
@@ -490,7 +540,7 @@ function startPlaying(snap) {
     }
   }, 700);
   updateHudFromPlayer(localPlayer, snap);
-  console.log('FPS + LEGO controls locked', { myId, x: localPlayer.x, z: localPlayer.z, weapon: localPlayer.weapon?.id });
+  console.log('FPS + LEGO controls locked', { myId, x: localPlayer.x, z: localPlayer.z, weapon: localPlayer.weapon?.id, camY: state.camera?.position.y });
 }
 
 // ——— Networking ———
@@ -689,10 +739,14 @@ function spawnTracer(origin, dir) {
 }
 
 function updateViewmodel(player) {
+  if (!state.camera) return;
   if (!state.viewmodel) {
     state.viewmodel = new THREE.Group();
+    // Viewmodel is a child of camera — camera must NOT be added to scene
     state.camera.add(state.viewmodel);
-    state.scene.add(state.camera);
+    if (state.scene?.children.includes(state.camera)) {
+      state.scene.remove(state.camera);
+    }
   }
   const wid = player.weapon?.id;
   if (wid === 'FIST') {
@@ -723,8 +777,9 @@ function updateViewmodel(player) {
 
 // ——— Local simulation ———
 function updateLocal(dt) {
-  // Always keep character POV while match is active (even if dead / controls briefly off)
-  if (!localPlayer || !state.playing) return;
+  if (!state.playing) return;
+  ensureLocalPlayer();
+  if (!localPlayer) return;
 
   // Hard-lock: never allow spectator orbit mid-match
   state.droneMode = false;
@@ -945,20 +1000,28 @@ function loop() {
   if (!state.renderer || !state.scene || !state.camera) return;
   const dt = Math.min(0.05, state.clock.getDelta());
 
-  // Playing = first-person only. Never fall back to spectator orbit mid-match.
-  if (state.playing) {
+  const hudActive = !$('game-hud')?.classList.contains('hidden');
+  const matchLive = state.playing || room?.state === 'playing' || hudActive;
+
+  if (matchLive) {
+    state.playing = true;
     state.droneMode = false;
+    state.screen = 'playing';
+    ensureLocalPlayer();
     updateLocal(dt);
-    // Safety: if updateLocal early-returned without camera, still lock eyes
-    if (localPlayer) applyFpsCamera();
-  } else {
-    // Idle menu camera orbit only
-    if (state.screen === 'main-menu' || state.screen === 'menu' || state.screen === 'join-screen' || state.screen === 'lobby-screen') {
-      state.droneAngle += dt * 0.15;
-      state.camera.position.set(Math.cos(state.droneAngle) * 48, 28, Math.sin(state.droneAngle) * 48);
-      state.camera.lookAt(0, 2, -5);
+    applyFpsCamera();
+    // Watchdog: never stay on menu/spectator height during a match
+    if (isStuckSpectatorView()) {
+      console.warn('Spectator camera watchdog — forcing FPS', state.camera.position.y);
+      applyFpsCamera();
     }
+  } else if (state.screen === 'main-menu' || state.screen === 'menu' || state.screen === 'join-screen' || state.screen === 'lobby-screen') {
+    state.droneAngle += dt * 0.15;
+    state.camera.position.set(Math.cos(state.droneAngle) * 48, 28, Math.sin(state.droneAngle) * 48);
+    state.camera.rotation.set(0, 0, 0);
+    state.camera.lookAt(0, 2, -5);
   }
+
   animateRemote(dt);
   updateTracers(dt);
   state.renderer.render(state.scene, state.camera);
