@@ -143,7 +143,7 @@ export class GameRoom {
   }
 
   startRound(spawns, crateSpots) {
-    this.state = 'drone';
+    this.state = 'lobby'; // beginPlaying() will set 'playing' — never leave clients in drone/spectator
     this.timer = ROUND_TIME;
     this.spawnCrates(crateSpots);
 

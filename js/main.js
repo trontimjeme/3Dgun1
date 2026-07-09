@@ -337,31 +337,9 @@ function syncCrates(crates) {
   }
 }
 
+/** Drone/spectator intro removed — always enter as the character (FPS). */
 function startDroneView(snap) {
-  state.droneMode = true;
-  state.playing = false;
-  state.droneAngle = 0;
-  state.controls.enabled = false;
-  setHud(true);
-  $('drone-banner').classList.remove('hidden');
-  $('drone-banner').textContent = 'DRONE INTRO — Chạm để VÀO NHÂN VẬT (FPS như CS:GO)';
-  $('countdown-overlay').classList.add('hidden');
-  syncPlayers(snap.players);
-  syncCrates(snap.crates);
-  const me = snap.players.find((p) => p.id === myId);
-  localPlayer = me ? { ...me } : null;
-  for (const [id, ch] of state.characters) {
-    ch.visible = true;
-    if (id === myId) {
-      ch.scale.set(1.4, 1.4, 1.4);
-      if (ch.userData.youMarker) ch.userData.youMarker.visible = true;
-    } else {
-      ch.scale.set(1, 1, 1);
-      if (ch.userData.youMarker) ch.userData.youMarker.visible = false;
-    }
-  }
-  updateHudFromPlayer(localPlayer, snap);
-  msg('Sắp nhập vai CT (mũi tên vàng) — góc nhìn ngôi thứ nhất như CS:GO', 4000);
+  startPlaying(snap);
 }
 
 function findMe(players) {
@@ -378,14 +356,47 @@ function findMe(players) {
   return players[0];
 }
 
-function startPlaying(snap) {
-  if (state.playing && localPlayer && !state.droneMode) {
-    // Already in FPS — refresh snapshot only
-    room = snap;
-    return;
+function applyFpsCamera() {
+  if (!localPlayer || !state.camera) return;
+  const eye = localPlayer.prone ? 0.45 : 1.65;
+  state.eyeHeight = eye;
+  const yaw = localPlayer.yaw || 0;
+  const pitch = localPlayer.pitch || 0;
+  // Character eye-level POV — look along the same forward used for movement
+  state.camera.position.set(localPlayer.x, (localPlayer.y || 0) + eye, localPlayer.z);
+  state.camera.lookAt(
+    localPlayer.x + Math.sin(yaw) * Math.cos(pitch),
+    (localPlayer.y || 0) + eye + Math.sin(pitch),
+    localPlayer.z + Math.cos(yaw) * Math.cos(pitch)
+  );
+  const fov = state.controls?.fovForScope?.(75) ?? 75;
+  if (Math.abs(state.camera.fov - fov) > 0.01) {
+    state.camera.fov = fov;
+    state.camera.updateProjectionMatrix();
   }
+}
+
+function showLegoControls() {
+  setHud(true);
+  const tc = $('touch-controls');
+  if (tc) {
+    tc.classList.remove('hidden');
+    tc.style.display = '';
+    tc.style.visibility = 'visible';
+    tc.style.opacity = '1';
+    tc.style.pointerEvents = 'none'; // children keep pointer-events:auto
+  }
+  $('crosshair')?.classList.remove('hidden');
+  $('drone-banner')?.classList.add('hidden');
+  // Hide spectator drone button — match is always character POV
+  const droneBtn = $('btn-drone-cam');
+  if (droneBtn) droneBtn.classList.add('hidden');
+}
+
+function startPlaying(snap) {
   if (!ensureThree()) return;
 
+  // Force character POV — never stay in spectator/drone
   state.droneMode = false;
   state.playing = true;
   state.thirdPerson = false;
@@ -395,80 +406,72 @@ function startPlaying(snap) {
   state.combatReady = false;
 
   document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
-  $('drone-banner')?.classList.add('hidden');
-  setHud(true);
-  $('crosshair')?.classList.remove('hidden');
+  $('click-hint')?.classList.add('hidden');
+  showLegoControls();
 
   room = snap;
-  syncPlayers(snap.players);
+  syncPlayers(snap.players || []);
   syncCrates(snap.crates || []);
 
   const me = findMe(snap.players);
   if (!me) {
-    console.error('No local player in snapshot', { myId, players: snap.players });
+    console.error('No local player', { myId, players: snap.players });
     msg('Lỗi: không tìm thấy nhân vật của bạn', 5000);
     return;
   }
   myId = me.id;
   localPlayer = {
     ...me,
-    x: me.x, y: me.y || 0, z: me.z,
-    yaw: me.yaw || 0, pitch: me.pitch || 0,
+    x: me.x ?? 0,
+    y: me.y || 0,
+    z: me.z ?? 14,
+    yaw: me.yaw ?? Math.PI,
+    pitch: me.pitch || 0,
     loadout: me.loadout,
     weapon: me.weapon,
+    ads: false,
+    prone: false,
+    sprinting: false,
+    alive: me.alive !== false,
   };
 
-  // FPS: hide own body — you ARE this character
-  const myChar = state.characters.get(myId);
-  if (myChar) {
-    myChar.visible = false;
-    if (myChar.userData.youMarker) myChar.userData.youMarker.visible = false;
+  for (const [id, ch] of state.characters) {
+    if (id === myId) {
+      ch.visible = false;
+      if (ch.userData.youMarker) ch.userData.youMarker.visible = false;
+    }
   }
 
-  // Place camera at eyes IMMEDIATELY (don't wait for first frame)
-  const eye = 1.65;
-  state.eyeHeight = eye;
-  state.camera.position.set(localPlayer.x, localPlayer.y + eye, localPlayer.z);
-  state.camera.lookAt(
-    localPlayer.x + Math.sin(localPlayer.yaw),
-    localPlayer.y + eye,
-    localPlayer.z + Math.cos(localPlayer.yaw)
-  );
-  state.camera.fov = 75;
-  state.camera.updateProjectionMatrix();
-
+  applyFpsCamera();
   if (state.viewmodel) state.viewmodel.visible = true;
   updateViewmodel(localPlayer);
 
-  try {
-    if (!('ontouchstart' in window)) {
-      document.getElementById('game-canvas')?.requestPointerLock?.();
-    }
-  } catch (_) {}
+  const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+  if (!isTouch) {
+    try { document.getElementById('game-canvas')?.requestPointerLock?.(); } catch (_) {}
+    $('click-hint')?.classList.remove('hidden');
+  }
 
   let n = 3;
   $('countdown-overlay').classList.remove('hidden');
   $('countdown-num').textContent = n;
   const iv = setInterval(() => {
+    if (!state.playing) { clearInterval(iv); return; }
     n--;
     if (n <= 0) {
       clearInterval(iv);
       $('countdown-overlay').classList.add('hidden');
       state.combatReady = true;
-      msg(snap.soloMode
-        ? 'BẠN ĐANG ĐIỀU KHIỂN — WASD di chuyển · chuột nhìn · LMB bắn · V đổi súng'
-        : (localPlayer.team === 'CT' ? 'BẢO VỆ!' : 'TẤN CÔNG!'), 4000);
-      try {
-        if (!('ontouchstart' in window)) {
-          document.getElementById('game-canvas')?.requestPointerLock?.();
-        }
-      } catch (_) {}
+      msg('BẠN LÀ NHÂN VẬT — joystick / WASD · nhìn · BẮN', 4000);
+      if (!isTouch) {
+        try { document.getElementById('game-canvas')?.requestPointerLock?.(); } catch (_) {}
+      }
     } else {
       $('countdown-num').textContent = n;
     }
   }, 700);
   updateHudFromPlayer(localPlayer, snap);
-  console.log('FPS start', { myId, pos: [localPlayer.x, localPlayer.y, localPlayer.z], weapon: localPlayer.weapon?.id });
+  console.log('FPS + LEGO controls locked', { myId, x: localPlayer.x, z: localPlayer.z, weapon: localPlayer.weapon?.id });
 }
 
 // ——— Networking ———
@@ -490,7 +493,8 @@ function wireSocketEvents(sock) {
   });
 
   sock.on('game:tick', (data) => {
-    if (!state.playing && !state.droneMode) return;
+    if (!state.playing) return;
+    state.droneMode = false;
     if (room) {
       room.timer = data.timer;
       if (data.players) room.players = data.players;
@@ -508,7 +512,7 @@ function wireSocketEvents(sock) {
         }
       }
       syncPlayers(data.players);
-      if (localPlayer && state.playing && !state.droneMode) {
+      if (localPlayer) {
         const ch = state.characters.get(myId);
         if (ch) ch.visible = false;
       }
@@ -686,8 +690,20 @@ function updateViewmodel(player) {
 
 // ——— Local simulation ———
 function updateLocal(dt) {
-  if (!localPlayer || !localPlayer.alive || !state.playing || state.droneMode) return;
+  // Always keep character POV while match is active (even if dead / controls briefly off)
+  if (!localPlayer || !state.playing) return;
+
+  // Hard-lock: never allow spectator orbit mid-match
+  state.droneMode = false;
+
   const ctrl = state.controls;
+  if (!ctrl.enabled || !localPlayer.alive) {
+    applyFpsCamera();
+    if (state.viewmodel) state.viewmodel.visible = !!localPlayer.alive;
+    updateHudFromPlayer(localPlayer, room);
+    return;
+  }
+
   ctrl.update();
 
   const look = ctrl.consumeLook();
@@ -743,18 +759,7 @@ function updateLocal(dt) {
     ch.visible = false;
   }
 
-  // CS:GO first-person camera
-  const eye = localPlayer.prone ? 0.45 : 1.65;
-  state.eyeHeight = eye;
-  state.camera.position.set(localPlayer.x, localPlayer.y + eye, localPlayer.z);
-  const lookAt = new THREE.Vector3(
-    localPlayer.x + Math.sin(localPlayer.yaw) * Math.cos(localPlayer.pitch),
-    localPlayer.y + eye + Math.sin(localPlayer.pitch),
-    localPlayer.z + Math.cos(localPlayer.yaw) * Math.cos(localPlayer.pitch)
-  );
-  state.camera.lookAt(lookAt);
-  state.camera.fov = ctrl.fovForScope(75);
-  state.camera.updateProjectionMatrix();
+  applyFpsCamera();
 
   // Gun in hands (FPS viewmodel)
   if (state.viewmodel) state.viewmodel.visible = true;
@@ -775,7 +780,10 @@ function updateLocal(dt) {
       msg(`Đổi sang ${WEAPONS[localPlayer.weapon.id]?.name}`, 1000);
     }
   }
-  if (ctrl.consumePress('drone')) toggleDronePeek();
+  // Ignore drone peek — stay in character POV
+  if (ctrl.consumePress('drone')) {
+    msg('Chỉ góc nhìn nhân vật — không dùng camera người xem', 1500);
+  }
 
   // Fire
   const wantFire = ctrl.fire || ctrl.consumePress('fire');
@@ -862,57 +870,15 @@ function tryShoot() {
 }
 
 function toggleDronePeek() {
-  if (!state.playing) return;
-  state.droneMode = !state.droneMode;
-  if (state.droneMode) {
-    $('drone-banner').classList.remove('hidden');
-    $('drone-banner').textContent = 'CAMERA TOÀN CẢNH — Nhấn Drone để quay lại FPS';
-    state.controls.enabled = false;
-    const ch = state.characters.get(myId);
-    if (ch) {
-      ch.visible = true;
-      if (ch.userData.youMarker) ch.userData.youMarker.visible = true;
-    }
-    if (state.viewmodel) state.viewmodel.visible = false;
-  } else {
-    $('drone-banner').classList.add('hidden');
-    state.controls.enabled = true;
-    const ch = state.characters.get(myId);
-    if (ch) ch.visible = false;
-    if (state.viewmodel) state.viewmodel.visible = true;
-    try {
-      document.getElementById('game-canvas')?.requestPointerLock?.();
-    } catch (_) {}
-  }
+  // Disabled: game is always character first-person POV
+  state.droneMode = false;
+  msg('Chỉ góc nhìn nhân vật', 1200);
 }
 
-function updateDrone(dt) {
-  // 50% faster orbit than before (0.35 → 0.525)
-  state.droneAngle += dt * 0.525;
-  const r = 42;
-  const h = 32;
-  const x = Math.cos(state.droneAngle) * r;
-  const z = Math.sin(state.droneAngle) * r;
-  state.camera.position.set(x, h, z);
-  // Highlight local player during drone — follow them a bit
-  if (localPlayer) {
-    // Soft look-at player while still orbiting map
-    const mix = 0.35;
-    const lookX = localPlayer.x * mix;
-    const lookZ = localPlayer.z * mix;
-    state.camera.lookAt(lookX, 1.5, lookZ);
-  } else {
-    state.camera.lookAt(0, 2, 0);
-  }
-  state.camera.fov = 55;
-  state.camera.updateProjectionMatrix();
-
-  // Bob crates
-  for (const [, mesh] of state.crates) {
-    mesh.userData.bob += dt * 2;
-    mesh.position.y = Math.sin(mesh.userData.bob) * 0.1;
-    mesh.rotation.y += dt * 0.8;
-  }
+function updateDrone(_dt) {
+  // No-op — spectator orbit removed during matches
+  state.droneMode = false;
+  if (localPlayer && state.playing) applyFpsCamera();
 }
 
 function updateTracers(dt) {
@@ -931,7 +897,7 @@ function updateTracers(dt) {
 function animateRemote(dt) {
   if (!state.scene) return;
   for (const [id, ch] of state.characters) {
-    if (id === myId && state.playing && !state.droneMode) continue;
+    if (id === myId && state.playing) continue;
     animateCharacter(ch, true, dt * 0.3, false);
   }
   for (const [, mesh] of state.crates) {
@@ -945,11 +911,16 @@ function loop() {
   requestAnimationFrame(loop);
   if (!state.renderer || !state.scene || !state.camera) return;
   const dt = Math.min(0.05, state.clock.getDelta());
-  if (state.droneMode) updateDrone(dt);
-  else if (state.playing) updateLocal(dt);
-  else {
-    // Idle menu camera orbit
-    if (state.screen === 'main-menu' || state.screen === 'menu') {
+
+  // Playing = first-person only. Never fall back to spectator orbit mid-match.
+  if (state.playing) {
+    state.droneMode = false;
+    updateLocal(dt);
+    // Safety: if updateLocal early-returned without camera, still lock eyes
+    if (localPlayer) applyFpsCamera();
+  } else {
+    // Idle menu camera orbit only
+    if (state.screen === 'main-menu' || state.screen === 'menu' || state.screen === 'join-screen' || state.screen === 'lobby-screen') {
       state.droneAngle += dt * 0.15;
       state.camera.position.set(Math.cos(state.droneAngle) * 48, 28, Math.sin(state.droneAngle) * 48);
       state.camera.lookAt(0, 2, -5);
@@ -1001,9 +972,10 @@ function bindUI() {
     if (!ensureThree()) return;
     const btn = $('btn-bot-game');
     btn.disabled = true;
-    $('conn-status').textContent = 'Đang vào trận bot...';
+    $('conn-status').textContent = 'Đang vào trận bot (FPS)...';
     try {
       await ensureConnected();
+      myId = socket.id;
       socket.emit('room:bot', { name: playerName(), mode: '5v5' }, (res) => {
         btn.disabled = false;
         if (!res?.ok) {
@@ -1013,8 +985,14 @@ function bindUI() {
         myId = socket.id;
         room = res.room;
         updateLobbyUI(res.room);
-        $('conn-status').textContent = 'Bot 5v5 — chờ drone...';
-        msg('Đang vào trận với bot...', 2000);
+        $('conn-status').textContent = 'Bot 5v5 — góc nhìn nhân vật';
+        // Force FPS if round:start is delayed
+        setTimeout(() => {
+          if (!state.playing && res.room?.players?.length) {
+            socket.emit('round:skipDrone');
+            if (!state.playing) startPlaying({ ...res.room, state: 'playing', crates: res.room.crates || [] });
+          }
+        }, 600);
       });
     } catch (err) {
       btn.disabled = false;
@@ -1040,14 +1018,12 @@ function bindUI() {
         }
         myId = socket.id;
         room = res.room;
-        $('conn-status').textContent = '1 vs 10 — đang nhập vai...';
-        // Safety: if round:start missed, force FPS after 1s using lobby snapshot
+        $('conn-status').textContent = '1 vs 10 — góc nhìn nhân vật';
+        // Safety: if round:start missed, force FPS quickly
         setTimeout(() => {
           if (!state.playing && res.room?.players?.length) {
             console.warn('Force FPS start from room callback');
-            // Synthesize a playing snapshot (spawns applied on server shortly)
             socket.emit('round:skipDrone');
-            // Local offline: beginRoundFlow may have already run; if still stuck, start with current room
             if (!state.playing) {
               const snap = {
                 ...res.room,
@@ -1075,7 +1051,7 @@ function bindUI() {
               startPlaying(snap);
             }
           }
-        }, 1200);
+        }, 500);
       });
     } catch (err) {
       btn.disabled = false;
@@ -1115,17 +1091,19 @@ function bindUI() {
   };
 
   $('drone-banner').onclick = () => {
-    if (state.droneMode && !state.playing) {
+    // Always character POV — skip any leftover drone state
+    if (!state.playing) {
       socket?.emit('round:skipDrone');
       return;
     }
-    toggleDronePeek();
+    state.droneMode = false;
   };
 
-  // Tap/click anywhere during drone intro to enter the match as YOU
+  // Tap/click anywhere during leftover drone intro to enter as YOU
   canvas.addEventListener('pointerdown', () => {
-    if (state.droneMode && !state.playing) {
+    if (!state.playing && state.droneMode) {
       socket?.emit('round:skipDrone');
+      state.droneMode = false;
     }
   });
 
