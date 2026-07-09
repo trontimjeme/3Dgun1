@@ -407,8 +407,14 @@ function getPlayerForCamera() {
   };
 }
 
+function detachCamera() {
+  if (!state.camera) return;
+  if (state.camera.parent) state.camera.parent.remove(state.camera);
+}
+
 function applyFpsCamera() {
   if (!state.camera) return;
+  detachCamera();
 
   const p = getPlayerForCamera();
   const eye = p.prone ? 0.45 : 1.65;
@@ -418,17 +424,16 @@ function applyFpsCamera() {
   const px = Number.isFinite(p.x) ? p.x : 0;
   const py = p.y || 0;
   const pz = Number.isFinite(p.z) ? p.z : 14;
+  const eyeY = py + eye;
 
-  // FPS: camera is NEVER in the scene graph
-  if (state.scene?.children.includes(state.camera)) {
-    state.scene.remove(state.camera);
-  }
-
-  state.camera.position.set(px, py + eye, pz);
-  state.camera.rotation.order = 'YXZ';
-  state.camera.rotation.y = yaw;
-  state.camera.rotation.x = pitch;
-  state.camera.rotation.z = 0;
+  // Free camera (no scene parent) — lookAt sets the view matrix used by renderer
+  state.camera.position.set(px, eyeY, pz);
+  state.camera.up.set(0, 1, 0);
+  state.camera.lookAt(
+    px + Math.sin(yaw) * Math.cos(pitch),
+    eyeY + Math.sin(pitch),
+    pz + Math.cos(yaw) * Math.cos(pitch),
+  );
   state.camera.updateMatrixWorld(true);
 
   const fov = state.controls?.fovForScope?.(75) ?? 75;
@@ -438,11 +443,36 @@ function applyFpsCamera() {
   }
 }
 
+function getCameraWorldY() {
+  if (!state.camera) return 0;
+  const v = new THREE.Vector3();
+  state.camera.getWorldPosition(v);
+  return v.y;
+}
+
+function getCameraLookDir() {
+  if (!state.camera) return { x: 0, y: 0, z: 0 };
+  const d = new THREE.Vector3();
+  state.camera.getWorldDirection(d);
+  return { x: d.x, y: d.y, z: d.z };
+}
+
 function isStuckSpectatorView() {
-  return state.camera && state.camera.position.y > 6;
+  const y = getCameraWorldY();
+  const dir = getCameraLookDir();
+  // Spectator = high up AND looking mostly downward at the map
+  return y > 6 || dir.y < -0.45;
 }
 
 /** Single entry: match started → you control the character in first-person. */
+function forceRenderFrames(n = 2) {
+  if (!state.renderer || !state.scene || !state.camera) return;
+  for (let i = 0; i < n; i++) {
+    applyFpsCamera();
+    state.renderer.render(state.scene, state.camera);
+  }
+}
+
 function enterPlayerView(snap) {
   if (snap) room = snap;
   state.droneMode = false;
@@ -452,6 +482,7 @@ function enterPlayerView(snap) {
   showLegoControls();
   ensureLocalPlayer(snap?.players);
   applyFpsCamera();
+  forceRenderFrames(3);
 }
 
 function showLegoControls() {
@@ -770,11 +801,7 @@ function updateViewmodel(player) {
   if (!state.camera) return;
   if (!state.viewmodel) {
     state.viewmodel = new THREE.Group();
-    // Viewmodel is a child of camera — camera must NOT be added to scene
     state.camera.add(state.viewmodel);
-    if (state.scene?.children.includes(state.camera)) {
-      state.scene.remove(state.camera);
-    }
   }
   const wid = player.weapon?.id;
   if (wid === 'FIST') {
@@ -1032,31 +1059,44 @@ function loop() {
   const matchLive = state.playing || room?.state === 'playing' || hudActive;
 
   if (matchLive) {
-    // RULE: during a match the camera is ALWAYS first-person — never menu/drone orbit
     state.playing = true;
     state.droneMode = false;
     state.screen = 'playing';
     ensureLocalPlayer();
-    applyFpsCamera(); // apply BEFORE movement so we never render one frame at orbit height
+    applyFpsCamera();
     updateLocal(dt);
-    applyFpsCamera(); // apply AFTER movement
+    applyFpsCamera();
     if (isStuckSpectatorView()) {
-      console.warn('Spectator watchdog — forcing player POV', state.camera.position.y);
+      console.warn('Spectator watchdog', getCameraWorldY(), getCameraLookDir());
       applyFpsCamera();
     }
   } else if (
     !hudActive &&
     (state.screen === 'main-menu' || state.screen === 'menu' || state.screen === 'join-screen' || state.screen === 'lobby-screen')
   ) {
+    detachCamera();
     state.droneAngle += dt * 0.15;
     state.camera.position.set(Math.cos(state.droneAngle) * 48, 28, Math.sin(state.droneAngle) * 48);
-    state.camera.rotation.set(0, 0, 0);
+    state.camera.up.set(0, 1, 0);
     state.camera.lookAt(0, 2, -5);
+    state.camera.updateMatrixWorld(true);
+  }
+
+  // Recover from WebGL context loss (frozen frame = stuck spectator view)
+  const gl = state.renderer?.getContext?.();
+  if (gl?.isContextLost?.()) {
+    console.warn('WebGL context lost — reinitializing renderer');
+    state.renderer = null;
+    state.scene = null;
+    try { initThree(); } catch (e) { console.error(e); }
+    return;
   }
 
   animateRemote(dt);
   updateTracers(dt);
-  state.renderer.render(state.scene, state.camera);
+  if (state.renderer && state.scene && state.camera) {
+    state.renderer.render(state.scene, state.camera);
+  }
 }
 
 // ——— Menu bindings ———
@@ -1232,7 +1272,18 @@ function ensureConnected() {
   return connecting;
 }
 
-// Prefetch offline-ready status on menu
+// Debug hook for automated tests
+window.__GAME_DEBUG__ = () => ({
+  playing: state.playing,
+  screen: state.screen,
+  camLocalY: state.camera?.position.y,
+  camWorldY: getCameraWorldY(),
+  lookDir: getCameraLookDir(),
+  matrixTy: state.camera?.matrixWorld?.elements?.[13],
+  camParent: state.camera?.parent?.name || null,
+  player: localPlayer ? { x: localPlayer.x, z: localPlayer.z, yaw: localPlayer.yaw } : null,
+  hud: !$('game-hud')?.classList.contains('hidden'),
+});
 setTimeout(() => {
   if (!socket && $('conn-status') && !$('conn-status').textContent) {
     const hasRemote = !!(window.GAME_SERVER_URL || '').trim();
