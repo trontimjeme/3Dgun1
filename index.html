@@ -29,7 +29,7 @@
         <button id="btn-create-room" class="btn primary">Tạo Phòng Online</button>
         <button id="btn-join-room" class="btn">Vào Phòng</button>
       </div>
-      <p class="kb-hint">PC: WASD · Space Nhảy · Shift Chạy · LMB Bắn · RMB/G Ngắm · R Nạp · Q Nhặt · V Đổi súng · C Nằm</p>
+      <p class="kb-hint">PC: WASD · Space Nhảy (x2) · <b>H</b> Góc nhìn 3 người · Shift Chạy · LMB Bắn · R Nạp · V Đổi súng</p>
       <p class="kb-hint" style="margin-top:6px;opacity:0.75">Trên Vercel: bấm <b>Test 1 mình</b> để thử WASD / joystick / bắn / nhảy / nạp đạn ngay — không cần bot.</p>
       <p id="conn-status" class="conn-status"></p>
     </div>
@@ -116,7 +116,7 @@
     <div id="kill-feed"></div>
     <div id="game-messages"></div>
     <div id="click-hint" class="hidden">Click để khóa chuột (CS mode)<br><small>ESC để thoát</small></div>
-    <div id="kb-bar">WASD · Space Nhảy · Shift Chạy · LMB Bắn · RMB/G Ngắm · R Nạp · Q Nhặt · <b>V Đổi súng</b> · C Nằm</div>
+    <div id="kb-bar">WASD · Space <b>Nhảy x2</b> · <b>H</b> 3rd person · LMB Bắn · R Nạp · V Đổi súng · leo tường/nóc</div>
 
     <!-- Touch controls — layout giống LEGO City Shooter -->
     <div id="touch-controls">
@@ -138,6 +138,7 @@
         <button class="sm-btn arc-btn" id="btn-sprint" type="button" style="left:80px;top:108px;"><span class="ic">💨</span><span class="lb">CHẠY</span></button>
         <button class="sm-btn arc-btn" id="btn-jump" type="button" style="left:55px;top:150px;"><span class="ic">↑</span><span class="lb">NHẢY</span></button>
         <button class="sm-btn arc-btn" id="btn-prone" type="button" style="left:100px;top:175px;"><span class="ic">⬇</span><span class="lb">NẰM</span></button>
+        <button class="sm-btn arc-btn" id="btn-third-person" type="button" style="left:160px;top:175px;"><span class="ic">👤</span><span class="lb">H</span></button>
         <button class="fire-btn arc-btn" id="btn-fire" type="button"><span class="ic">🔫</span><span class="lb">BẮN</span></button>
       </div>
 
@@ -179,6 +180,6 @@
     }
   }
   </script>
-  <script type="module" src="js/main.js?v=fps9"></script>
+  <script type="module" src="js/main.js?v=fps10"></script>
 </body>
 </html>

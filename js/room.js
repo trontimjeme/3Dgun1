@@ -216,9 +216,14 @@ export class GameRoom {
     if (!w) return null;
     const now = Date.now() / 1000;
     if (p.weapon.reloading) return null;
-    if (now - p.weapon.lastShot < w.fireRate) return null;
+    if (now - (p.weapon.lastShot || 0) < w.fireRate) return null;
     const isMelee = !!w.melee;
     if (!isMelee && p.weapon.clip <= 0) return null;
+
+    // Server-side hit scan when client raycast misses (common in 1v10)
+    if (!hitPlayerId && origin && dir && !isMelee) {
+      hitPlayerId = this._raycastHitPlayer(p, origin, dir, w.range);
+    }
 
     if (!isMelee) p.weapon.clip--;
     p.weapon.lastShot = now;
@@ -256,6 +261,42 @@ export class GameRoom {
       }
     }
     return result;
+  }
+
+  /** Ray vs player capsule — forgiving hit for bots */
+  _raycastHitPlayer(shooter, origin, dir, maxRange) {
+    const ox = origin.x ?? shooter.x;
+    const oy = origin.y ?? shooter.y + 1.5;
+    const oz = origin.z ?? shooter.z;
+    const dx = dir.x;
+    const dy = dir.y;
+    const dz = dir.z;
+    const len = Math.hypot(dx, dy, dz) || 1;
+    const ndx = dx / len;
+    const ndy = dy / len;
+    const ndz = dz / len;
+
+    let bestId = null;
+    let bestT = maxRange;
+    const hitR = 1.35;
+
+    for (const target of this.players.values()) {
+      if (target.id === shooter.id || target.team === shooter.team || !target.alive) continue;
+      const tx = target.x;
+      const ty = target.y + 1.0;
+      const tz = target.z;
+      const t = (tx - ox) * ndx + (ty - oy) * ndy + (tz - oz) * ndz;
+      if (t < 0.2 || t > bestT) continue;
+      const cx = ox + ndx * t;
+      const cy = oy + ndy * t;
+      const cz = oz + ndz * t;
+      const dist = Math.hypot(tx - cx, ty - cy, tz - cz);
+      if (dist <= hitR) {
+        bestT = t;
+        bestId = target.id;
+      }
+    }
+    return bestId;
   }
 
   /** Solo bots never pick up guns — stay fists-only */

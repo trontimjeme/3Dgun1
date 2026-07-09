@@ -263,13 +263,33 @@ export function createSky(scene) {
   return { sun, hemi };
 }
 
-/** AABB player collision against map colliders */
-export function resolveCollision(pos, radius, height, colliders) {
+/**
+ * Collision + landing on roofs/boxes + wall contact for climbing.
+ * Returns { pos, grounded, wallContact }.
+ */
+export function resolveCollision(pos, radius, height, colliders, velY = 0) {
+  let grounded = false;
+  let wallContact = null;
   const px = pos.x;
   const pz = pos.z;
-  const py = pos.y;
+  let py = pos.y;
+
+  // Land on top of colliders (roofs, crates, walls)
   for (const c of colliders) {
-    // Expand AABB by player radius
+    const topY = c.max.y;
+    if (topY < 0.45) continue;
+    const onX = px + radius > c.min.x && px - radius < c.max.x;
+    const onZ = pz + radius > c.min.z && pz - radius < c.max.z;
+    if (!onX || !onZ) continue;
+    if (velY <= 0.5 && py >= topY - 0.35 && py <= topY + 0.55) {
+      py = topY;
+      pos.y = py;
+      grounded = true;
+    }
+  }
+
+  // Horizontal push + detect wall faces
+  for (const c of colliders) {
     const minX = c.min.x - radius;
     const maxX = c.max.x + radius;
     const minZ = c.min.z - radius;
@@ -278,17 +298,29 @@ export function resolveCollision(pos, radius, height, colliders) {
     const maxY = c.max.y;
 
     if (px > minX && px < maxX && pz > minZ && pz < maxZ && py < maxY && py + height > minY) {
-      // Push out on smallest axis
       const dxL = px - minX;
       const dxR = maxX - px;
       const dzL = pz - minZ;
       const dzR = maxZ - pz;
       const minD = Math.min(dxL, dxR, dzL, dzR);
-      if (minD === dxL) pos.x = minX;
-      else if (minD === dxR) pos.x = maxX;
-      else if (minD === dzL) pos.z = minZ;
-      else pos.z = maxZ;
+      const topY = c.max.y;
+      const canMantle = py + height < topY + 0.2 && topY - py <= 2.2;
+
+      if (minD === dxL) {
+        pos.x = minX;
+        wallContact = { axis: 'x', sign: -1, topY, canMantle };
+      } else if (minD === dxR) {
+        pos.x = maxX;
+        wallContact = { axis: 'x', sign: 1, topY, canMantle };
+      } else if (minD === dzL) {
+        pos.z = minZ;
+        wallContact = { axis: 'z', sign: -1, topY, canMantle };
+      } else {
+        pos.z = maxZ;
+        wallContact = { axis: 'z', sign: 1, topY, canMantle };
+      }
     }
   }
-  return pos;
+
+  return { pos, grounded, wallContact };
 }
