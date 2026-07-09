@@ -457,13 +457,12 @@ function wireSocketEvents(sock) {
       if (localPlayer && state.playing) {
         const ch = state.characters.get(myId);
         if (ch) {
-          ch.position.set(localPlayer.x, localPlayer.y, localPlayer.z);
-          ch.rotation.y = localPlayer.yaw;
-          ch.visible = localPlayer.alive;
-          animateCharacter(ch, false, 0, localPlayer.prone);
+          // Don't overwrite predicted position — only ensure visible
+          ch.visible = !!localPlayer.alive;
+          if (ch.userData.youMarker) ch.userData.youMarker.visible = true;
           const mount = ch.userData.weaponMount;
           const wid = localPlayer.weapon?.id;
-          if (wid && mount.userData.wid !== wid) {
+          if (wid && wid !== 'FIST' && mount.userData.wid !== wid) {
             while (mount.children.length) mount.remove(mount.children[0]);
             mount.add(createWeaponMesh(wid));
             mount.userData.wid = wid;
