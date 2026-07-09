@@ -1,5 +1,22 @@
-/** 10 weapons — damage from strong to weak */
+/** 10 weapons — damage from strong to weak (+ FIST for melee bots) */
 export const WEAPONS = {
+  FIST: {
+    id: 'FIST',
+    name: 'Đấm tay không',
+    type: 'melee',
+    damage: 10, // 10 đấm = chết (100 HP)
+    fireRate: 0.5,
+    clipSize: 999,
+    reserve: 999,
+    reloadTime: 0.1,
+    spread: 0,
+    adsSpread: 0,
+    range: 2.8,
+    color: 0x111111,
+    accent: 0x333333,
+    longBarrel: false,
+    melee: true,
+  },
   AWP: {
     id: 'AWP',
     name: 'Súng Ngắm AWP',
@@ -163,7 +180,7 @@ export const WEAPONS = {
   },
 };
 
-export const WEAPON_IDS = Object.keys(WEAPONS);
+export const WEAPON_IDS = Object.keys(WEAPONS).filter((id) => id !== 'FIST');
 
 export function randomWeaponId() {
   return WEAPON_IDS[Math.floor(Math.random() * WEAPON_IDS.length)];

@@ -4,6 +4,7 @@ import { Server } from 'socket.io';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GameRoom, createRoomCode, WEAPONS } from '../js/room.js';
+import { updateBotsMeleeOrGun } from '../js/botAI.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
@@ -18,6 +19,7 @@ app.use(express.static(root));
 app.use('/node_modules', express.static(path.join(root, 'node_modules')));
 
 const rooms = new Map();
+const DRONE_MS = 5300; // ~50% faster than 8s
 
 // Shared spawn / crate data (must match client map)
 const SPAWNS = {
@@ -69,8 +71,15 @@ function startTick(room) {
       if (p.weapon?.reloading) room.finishReload(p.id);
     }
 
-    // Bot AI
-    updateBots(room);
+    // Bot AI (after shared countdown so both sides enter together)
+    if (!room.combatAt || Date.now() >= room.combatAt) {
+      updateBotsMeleeOrGun(
+        room,
+        (r) => io.to(room.code).emit('shot', r),
+        (k) => io.to(room.code).emit('kill', k),
+        (c) => io.to(room.code).emit('crate:picked', c),
+      );
+    }
 
     room.timer = Math.max(0, room.timer - 0.1);
     const winner = room.checkWin();
@@ -85,101 +94,6 @@ function startTick(room) {
       crates: room.crates,
     });
   }, 100);
-}
-
-function updateBots(room) {
-  for (const bot of room.players.values()) {
-    if (!bot.isBot || !bot.alive) continue;
-
-    // Pick up nearby crate
-    if (!bot.weapon) {
-      const crate = room.crates.find((c) => {
-        if (c.taken) return false;
-        const dx = bot.x - c.x;
-        const dz = bot.z - c.z;
-        return dx * dx + dz * dz < 16;
-      });
-      if (crate) {
-        const dx = crate.x - bot.x;
-        const dz = crate.z - bot.z;
-        const dist = Math.hypot(dx, dz) || 1;
-        if (dist > 1.2) {
-          bot.x += (dx / dist) * 0.12;
-          bot.z += (dz / dist) * 0.12;
-          bot.yaw = Math.atan2(dx, dz);
-        } else {
-          const r = room.pickupCrate(bot.id, crate.id);
-          if (r) io.to(room.code).emit('crate:picked', r);
-        }
-        continue;
-      }
-      // Wander toward center crates
-      const target = room.crates.find((c) => !c.taken) || { x: 0, z: 0 };
-      const dx = target.x - bot.x;
-      const dz = target.z - bot.z;
-      const dist = Math.hypot(dx, dz) || 1;
-      bot.x += (dx / dist) * 0.1;
-      bot.z += (dz / dist) * 0.1;
-      bot.yaw = Math.atan2(dx, dz);
-      continue;
-    }
-
-    // Engage nearest enemy
-    let nearest = null;
-    let nearestDist = Infinity;
-    for (const other of room.players.values()) {
-      if (!other.alive || other.team === bot.team) continue;
-      const d = Math.hypot(other.x - bot.x, other.z - bot.z);
-      if (d < nearestDist) {
-        nearestDist = d;
-        nearest = other;
-      }
-    }
-    if (!nearest) continue;
-
-    const dx = nearest.x - bot.x;
-    const dz = nearest.z - bot.z;
-    bot.yaw = Math.atan2(dx, dz);
-
-    if (nearestDist > 12) {
-      const dist = nearestDist || 1;
-      bot.x += (dx / dist) * 0.11;
-      bot.z += (dz / dist) * 0.11;
-    } else if (nearestDist < 4) {
-      bot.x -= (dx / nearestDist) * 0.08;
-      bot.z -= (dz / nearestDist) * 0.08;
-    }
-
-    // Clamp bounds
-    bot.x = Math.max(-22, Math.min(22, bot.x));
-    bot.z = Math.max(-26, Math.min(26, bot.z));
-
-    // Shoot
-    if (nearestDist < 35 && bot.weapon.clip > 0) {
-      const dir = {
-        x: Math.sin(bot.yaw),
-        y: 0,
-        z: Math.cos(bot.yaw),
-      };
-      const origin = { x: bot.x, y: 1.5, z: bot.z };
-      // Hit chance based on distance
-      const hitChance = Math.max(0.15, 1 - nearestDist / 40);
-      const hitId = Math.random() < hitChance ? nearest.id : null;
-      const result = room.tryShoot(bot.id, origin, dir, hitId);
-      if (result) {
-        io.to(room.code).emit('shot', result);
-        if (result.killed) {
-          io.to(room.code).emit('kill', {
-            killer: bot.name,
-            victim: nearest.name,
-            weaponId: result.weaponId,
-          });
-        }
-      }
-    } else if (bot.weapon.clip <= 0) {
-      room.reload(bot.id);
-    }
-  }
 }
 
 io.on('connection', (socket) => {
@@ -235,10 +149,11 @@ io.on('connection', (socket) => {
       io.to(room.code).emit('round:drone', room.snapshot());
       setTimeout(() => {
         if (room.beginPlaying()) {
+          room.combatAt = Date.now() + 2100;
           io.to(room.code).emit('round:start', room.snapshot());
           startTick(room);
         }
-      }, 8000);
+      }, DRONE_MS);
     }, 500);
   });
 
@@ -282,10 +197,11 @@ io.on('connection', (socket) => {
     io.to(room.code).emit('round:drone', room.snapshot());
     setTimeout(() => {
       if (room.beginPlaying()) {
+        room.combatAt = Date.now() + 2100;
         io.to(room.code).emit('round:start', room.snapshot());
         startTick(room);
       }
-    }, 8000);
+    }, DRONE_MS);
   });
 
   socket.on('chat', ({ text }) => {
@@ -305,6 +221,7 @@ io.on('connection', (socket) => {
   socket.on('player:shoot', ({ origin, dir, hitPlayerId }) => {
     const room = getRoom(socket.data.roomCode);
     if (!room) return;
+    if (room.combatAt && Date.now() < room.combatAt) return;
     const result = room.tryShoot(socket.id, origin, dir, hitPlayerId);
     if (!result) return;
     io.to(room.code).emit('shot', result);
@@ -344,6 +261,7 @@ io.on('connection', (socket) => {
     const room = getRoom(socket.data.roomCode);
     if (!room || room.state !== 'drone') return;
     if (room.beginPlaying()) {
+      room.combatAt = Date.now() + 2100;
       io.to(room.code).emit('round:start', room.snapshot());
       startTick(room);
     }

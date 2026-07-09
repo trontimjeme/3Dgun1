@@ -157,24 +157,28 @@ export class GameRoom {
       p.loadout = emptyLoadout();
       p.weapon = null;
 
-      // Solo human starts with AWP + AK47
+      // Solo human: AWP + AK47 · Solo bots: tay không (10 đấm mới chết)
       if (this.soloMode && !p.isBot) {
         this.giveLoadout(p, ['AWP', 'AK47']);
       } else if (this.soloMode && p.isBot) {
-        // Bots get a random primary so they can fight immediately
-        const botGuns = ['AK47', 'M4A1', 'MP31', 'UMP45', 'P90', 'DEAGLE'];
-        this.giveLoadout(p, [botGuns[Math.floor(Math.random() * botGuns.length)]]);
+        this.giveLoadout(p, ['FIST']);
       }
 
       const list = spawns[p.team] || spawns.CT;
       const idx = byTeam[p.team] % list.length;
       byTeam[p.team]++;
       const s = list[idx];
-      // Solo: spread T bots around map
+      // Solo: cả hai bên spawn cùng lúc gần sân giữa (không lệch map)
       if (this.soloMode && p.isBot) {
-        p.x = (Math.random() - 0.5) * 36;
-        p.z = -8 + (Math.random() - 0.5) * 28;
-        p.yaw = Math.random() * Math.PI * 2;
+        const angle = (byTeam.T / 10) * Math.PI * 2;
+        p.x = Math.cos(angle) * (8 + Math.random() * 4);
+        p.z = Math.sin(angle) * (8 + Math.random() * 4);
+        p.yaw = Math.atan2(-p.x, -p.z);
+      } else if (this.soloMode && !p.isBot) {
+        p.x = 0;
+        p.y = 0;
+        p.z = 14;
+        p.yaw = Math.PI;
       } else {
         p.x = s.x;
         p.y = 0;
@@ -204,27 +208,6 @@ export class GameRoom {
     return { playerId, weaponId: p.weapon?.id, active: p.loadout.active };
   }
 
-  pickupCrate(playerId, crateId) {
-    const p = this.players.get(playerId);
-    const crate = this.crates.find((c) => c.id === crateId);
-    if (!p || !p.alive || !crate || crate.taken) return null;
-    const dx = p.x - crate.x;
-    const dz = p.z - crate.z;
-    if (dx * dx + dz * dz > 4) return null;
-    crate.taken = true;
-    const state = createWeaponState(crate.weaponId);
-    if (!p.loadout) p.loadout = emptyLoadout();
-    if (p.loadout.slots.length < 2) {
-      p.loadout.slots.push(state);
-      p.loadout.active = p.loadout.slots.length - 1;
-    } else {
-      // Replace active slot
-      p.loadout.slots[p.loadout.active] = state;
-    }
-    p.weapon = p.loadout.slots[p.loadout.active];
-    return { playerId, crateId, weaponId: crate.weaponId, loadout: p.loadout };
-  }
-
   tryShoot(playerId, origin, dir, hitPlayerId) {
     const p = this.players.get(playerId);
     if (!p || !p.alive || this.state !== 'playing') return null;
@@ -234,9 +217,10 @@ export class GameRoom {
     const now = Date.now() / 1000;
     if (p.weapon.reloading) return null;
     if (now - p.weapon.lastShot < w.fireRate) return null;
-    if (p.weapon.clip <= 0) return null;
+    const isMelee = !!w.melee;
+    if (!isMelee && p.weapon.clip <= 0) return null;
 
-    p.weapon.clip--;
+    if (!isMelee) p.weapon.clip--;
     p.weapon.lastShot = now;
 
     const result = {
@@ -246,11 +230,18 @@ export class GameRoom {
       dir,
       hit: null,
       killed: false,
+      melee: isMelee,
     };
 
     if (hitPlayerId) {
       const target = this.players.get(hitPlayerId);
       if (target && target.alive && target.team !== p.team) {
+        // Melee: must be in range
+        if (isMelee) {
+          const dx = (origin?.x ?? p.x) - target.x;
+          const dz = (origin?.z ?? p.z) - target.z;
+          if (dx * dx + dz * dz > w.range * w.range) return result;
+        }
         let dmg = w.damage;
         if (w.pellets) dmg = w.damage * 3;
         target.hp -= dmg;
@@ -265,6 +256,33 @@ export class GameRoom {
       }
     }
     return result;
+  }
+
+  /** Solo bots never pick up guns — stay fists-only */
+  pickupCrate(playerId, crateId) {
+    const p = this.players.get(playerId);
+    if (this.soloMode && p?.isBot) return null;
+    return this._pickupCrateInner(playerId, crateId);
+  }
+
+  _pickupCrateInner(playerId, crateId) {
+    const p = this.players.get(playerId);
+    const crate = this.crates.find((c) => c.id === crateId);
+    if (!p || !p.alive || !crate || crate.taken) return null;
+    const dx = p.x - crate.x;
+    const dz = p.z - crate.z;
+    if (dx * dx + dz * dz > 4) return null;
+    crate.taken = true;
+    const state = createWeaponState(crate.weaponId);
+    if (!p.loadout) p.loadout = emptyLoadout();
+    if (p.loadout.slots.length < 2) {
+      p.loadout.slots.push(state);
+      p.loadout.active = p.loadout.slots.length - 1;
+    } else {
+      p.loadout.slots[p.loadout.active] = state;
+    }
+    p.weapon = p.loadout.slots[p.loadout.active];
+    return { playerId, crateId, weaponId: crate.weaponId, loadout: p.loadout };
   }
 
   reload(playerId) {

@@ -3,6 +3,9 @@
  * Mimics the Socket.io room API so bot modes work without a Node server.
  */
 import { GameRoom, createRoomCode } from './room.js';
+import { updateBotsMeleeOrGun } from './botAI.js';
+
+const DRONE_MS = 5300; // ~50% faster than 8s
 
 const SPAWNS = {
   CT: [
@@ -72,10 +75,11 @@ export function createLocalSocket() {
     emitLocal('round:drone', room.snapshot());
     startTimer = setTimeout(() => {
       if (room.beginPlaying()) {
+        room.combatAt = Date.now() + 2100; // sync with client 3-2-1 — both sides enter together
         emitLocal('round:start', room.snapshot());
         startTick();
       }
-    }, 8000);
+    }, DRONE_MS);
   }
 
   function startTick() {
@@ -85,7 +89,15 @@ export function createLocalSocket() {
       for (const p of room.players.values()) {
         if (p.weapon?.reloading) room.finishReload(p.id);
       }
-      updateBots(room, emitLocal);
+      // Both sides wait for countdown before combat
+      if (!room.combatAt || Date.now() >= room.combatAt) {
+        updateBotsMeleeOrGun(
+          room,
+          (r) => emitLocal('shot', r),
+          (k) => emitLocal('kill', k),
+          (c) => emitLocal('crate:picked', c),
+        );
+      }
       room.timer = Math.max(0, room.timer - 0.1);
       const winner = room.checkWin();
       if (winner) {
@@ -133,6 +145,7 @@ export function createLocalSocket() {
     if (event === 'round:skipDrone') {
       if (room.state === 'drone' && room.beginPlaying()) {
         if (startTimer) clearTimeout(startTimer);
+        room.combatAt = Date.now() + 2100;
         emitLocal('round:start', room.snapshot());
         startTick();
       }
@@ -145,6 +158,8 @@ export function createLocalSocket() {
     }
 
     if (event === 'player:shoot') {
+      // Freeze combat until countdown ends (both sides enter together)
+      if (room.combatAt && Date.now() < room.combatAt) return;
       const result = room.tryShoot(id, data?.origin, data?.dir, data?.hitPlayerId);
       if (!result) return;
       emitLocal('shot', result);
@@ -188,88 +203,4 @@ export function createLocalSocket() {
   // Fake connect
   setTimeout(() => emitLocal('connect'), 0);
   return api;
-}
-
-function updateBots(room, emitLocal) {
-  for (const bot of room.players.values()) {
-    if (!bot.isBot || !bot.alive) continue;
-
-    if (!bot.weapon) {
-      const crate = room.crates.find((c) => {
-        if (c.taken) return false;
-        const dx = bot.x - c.x;
-        const dz = bot.z - c.z;
-        return dx * dx + dz * dz < 16;
-      });
-      if (crate) {
-        const dx = crate.x - bot.x;
-        const dz = crate.z - bot.z;
-        const dist = Math.hypot(dx, dz) || 1;
-        if (dist > 1.2) {
-          bot.x += (dx / dist) * 0.12;
-          bot.z += (dz / dist) * 0.12;
-          bot.yaw = Math.atan2(dx, dz);
-        } else {
-          const r = room.pickupCrate(bot.id, crate.id);
-          if (r) emitLocal('crate:picked', r);
-        }
-        continue;
-      }
-      const target = room.crates.find((c) => !c.taken) || { x: 0, z: 0 };
-      const dx = target.x - bot.x;
-      const dz = target.z - bot.z;
-      const dist = Math.hypot(dx, dz) || 1;
-      bot.x += (dx / dist) * 0.1;
-      bot.z += (dz / dist) * 0.1;
-      bot.yaw = Math.atan2(dx, dz);
-      continue;
-    }
-
-    let nearest = null;
-    let nearestDist = Infinity;
-    for (const other of room.players.values()) {
-      if (!other.alive || other.team === bot.team) continue;
-      const d = Math.hypot(other.x - bot.x, other.z - bot.z);
-      if (d < nearestDist) {
-        nearestDist = d;
-        nearest = other;
-      }
-    }
-    if (!nearest) continue;
-
-    const dx = nearest.x - bot.x;
-    const dz = nearest.z - bot.z;
-    bot.yaw = Math.atan2(dx, dz);
-
-    if (nearestDist > 12) {
-      bot.x += (dx / nearestDist) * 0.11;
-      bot.z += (dz / nearestDist) * 0.11;
-    } else if (nearestDist < 4) {
-      bot.x -= (dx / nearestDist) * 0.08;
-      bot.z -= (dz / nearestDist) * 0.08;
-    }
-
-    bot.x = Math.max(-22, Math.min(22, bot.x));
-    bot.z = Math.max(-26, Math.min(26, bot.z));
-
-    if (nearestDist < 35 && bot.weapon.clip > 0) {
-      const dir = { x: Math.sin(bot.yaw), y: 0, z: Math.cos(bot.yaw) };
-      const origin = { x: bot.x, y: 1.5, z: bot.z };
-      const hitChance = Math.max(0.15, 1 - nearestDist / 40);
-      const hitId = Math.random() < hitChance ? nearest.id : null;
-      const result = room.tryShoot(bot.id, origin, dir, hitId);
-      if (result) {
-        emitLocal('shot', result);
-        if (result.killed) {
-          emitLocal('kill', {
-            killer: bot.name,
-            victim: nearest.name,
-            weaponId: result.weaponId,
-          });
-        }
-      }
-    } else if (bot.weapon.clip <= 0) {
-      room.reload(bot.id);
-    }
-  }
 }

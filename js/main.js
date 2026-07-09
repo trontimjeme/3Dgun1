@@ -343,6 +343,7 @@ function startPlaying(snap) {
   state.controls.enabled = true;
   state.controls.scopeLevel = 0;
   state.controls.ads = false;
+  state.combatReady = false;
   $('drone-banner').classList.add('hidden');
   syncPlayers(snap.players);
   syncCrates(snap.crates);
@@ -356,7 +357,7 @@ function startPlaying(snap) {
       weapon: me.weapon,
     };
   }
-  // Countdown
+  // Countdown — cả hai bên vào cùng lúc sau 3-2-1
   let n = 3;
   $('countdown-overlay').classList.remove('hidden');
   $('countdown-num').textContent = n;
@@ -365,8 +366,9 @@ function startPlaying(snap) {
     if (n <= 0) {
       clearInterval(iv);
       $('countdown-overlay').classList.add('hidden');
+      state.combatReady = true;
       if (snap.soloMode) {
-        msg('1 vs 10 — Bạn có AWP + AK47 · nhấn V để đổi súng!', 4000);
+        msg('1 vs 10 — Bot tay không (10 đấm mới chết) · V đổi AWP/AK47!', 4000);
       } else {
         msg(localPlayer?.team === 'CT' ? 'BẢO VỆ — Tiêu diệt Terrorist!' : 'TẤN CÔNG — Tiêu diệt CT!', 3000);
       }
@@ -574,6 +576,12 @@ function updateViewmodel(player) {
     state.scene.add(state.camera);
   }
   const wid = player.weapon?.id;
+  if (wid === 'FIST') {
+    // Hide gun viewmodel for fists
+    while (state.viewmodel.children.length) state.viewmodel.remove(state.viewmodel.children[0]);
+    state.viewmodel.userData.wid = 'FIST';
+    return;
+  }
   if (state.viewmodel.userData.wid !== wid) {
     while (state.viewmodel.children.length) {
       const c = state.viewmodel.children[0];
@@ -718,10 +726,11 @@ function tryPickup() {
 }
 
 function tryShoot() {
+  if (!state.combatReady) return;
   if (!localPlayer?.weapon || localPlayer.weapon.reloading) return;
   const w = WEAPONS[localPlayer.weapon.id];
-  if (!w || localPlayer.weapon.clip <= 0) {
-    if (localPlayer.weapon?.clip <= 0) msg('Hết đạn — nạp đạn!', 1000);
+  if (!w || (!w.melee && localPlayer.weapon.clip <= 0)) {
+    if (localPlayer.weapon?.clip <= 0 && !w?.melee) msg('Hết đạn — nạp đạn!', 1000);
     return;
   }
   const now = performance.now() / 1000;
@@ -783,7 +792,8 @@ function toggleDronePeek() {
 }
 
 function updateDrone(dt) {
-  state.droneAngle += dt * 0.35;
+  // 50% faster orbit than before (0.35 → 0.525)
+  state.droneAngle += dt * 0.525;
   const r = 42;
   const h = 32;
   const x = Math.cos(state.droneAngle) * r;
