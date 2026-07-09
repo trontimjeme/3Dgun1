@@ -31,7 +31,8 @@ export function buildMap(scene) {
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(x, y, z);
-    mesh.castShadow = true;
+    // Shadows optional — many mobile/Vercel preview GPUs struggle with shadow maps
+    mesh.castShadow = false;
     mesh.receiveShadow = true;
     group.add(mesh);
     if (opts.collide !== false) {

@@ -138,23 +138,54 @@ function updateHudFromPlayer(p, snap) {
 }
 
 // ——— Three.js setup ———
-function initThree() {
-  let renderer;
+function createRenderer() {
+  const attempts = [
+    { antialias: true, powerPreference: 'default', failIfMajorPerformanceCaveat: false, alpha: false },
+    { antialias: false, powerPreference: 'default', failIfMajorPerformanceCaveat: false, alpha: false },
+    { antialias: false, powerPreference: 'low-power', failIfMajorPerformanceCaveat: false, alpha: false },
+    { antialias: false, powerPreference: 'default', failIfMajorPerformanceCaveat: false, alpha: true },
+  ];
+  let lastErr = null;
+  for (const opts of attempts) {
+    try {
+      const renderer = new THREE.WebGLRenderer({ canvas, ...opts });
+      // Probe that context actually works
+      const gl = renderer.getContext();
+      if (!gl) throw new Error('null WebGL context');
+      return renderer;
+    } catch (e) {
+      lastErr = e;
+      console.warn('WebGL attempt failed', opts, e);
+    }
+  }
+  // Last resort: fresh canvas if the page canvas is tainted / lost
   try {
-    renderer = new THREE.WebGLRenderer({
-      canvas,
-      antialias: true,
-      powerPreference: 'high-performance',
+    const fallbackCanvas = document.createElement('canvas');
+    fallbackCanvas.id = 'game-canvas-fallback';
+    fallbackCanvas.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;z-index:0;display:block;';
+    canvas.style.display = 'none';
+    canvas.parentNode.insertBefore(fallbackCanvas, canvas);
+    const renderer = new THREE.WebGLRenderer({
+      canvas: fallbackCanvas,
+      antialias: false,
+      powerPreference: 'low-power',
       failIfMajorPerformanceCaveat: false,
     });
+    return renderer;
   } catch (e) {
-    // Fallback without antialias (some GPUs / remote desktops)
-    renderer = new THREE.WebGLRenderer({ canvas, antialias: false, failIfMajorPerformanceCaveat: false });
+    lastErr = e;
   }
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  throw lastErr || new Error('WebGL unavailable');
+}
+
+function initThree() {
+  if (state.renderer) return true;
+
+  const renderer = createRenderer();
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
   renderer.setSize(innerWidth, innerHeight);
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // Disable shadow maps by default for Vercel / integrated GPUs reliability
+  renderer.shadowMap.enabled = false;
 
   const scene = new THREE.Scene();
   createSky(scene);
@@ -167,13 +198,54 @@ function initThree() {
   state.scene = scene;
   state.camera = camera;
   state.mapData = mapData;
-  state.controls = new Controls();
+  // Controls already created at boot — do not re-bind listeners
 
   window.addEventListener('resize', () => {
-    camera.aspect = innerWidth / innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(innerWidth, innerHeight);
+    if (!state.camera || !state.renderer) return;
+    state.camera.aspect = innerWidth / innerHeight;
+    state.camera.updateProjectionMatrix();
+    state.renderer.setSize(innerWidth, innerHeight);
   });
+
+  // Recover from context loss (common with many Chrome tabs)
+  const el = renderer.domElement;
+  el.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    console.warn('WebGL context lost');
+    $('conn-status').textContent = 'WebGL bị mất — đang thử khôi phục...';
+  }, false);
+  el.addEventListener('webglcontextrestored', () => {
+    $('conn-status').textContent = 'WebGL đã khôi phục';
+  }, false);
+
+  return true;
+}
+
+/** Ensure 3D is ready before starting a match (call from button click). */
+function ensureThree() {
+  if (state.renderer) return true;
+  try {
+    initThree();
+    if (!state._loopStarted) {
+      state._loopStarted = true;
+      loop();
+    }
+    return true;
+  } catch (err) {
+    console.error(err);
+    const tip =
+      'Không tạo được WebGL trên trình duyệt này.\n\n' +
+      'Thử:\n' +
+      '1) Đóng bớt tab Chrome (đặc biệt tab game khác)\n' +
+      '2) Bật Hardware acceleration trong chrome://settings\n' +
+      '3) Mở lại trang trong tab mới (không dùng preview nhỏ trên dashboard Vercel)\n' +
+      '4) Dùng Chrome/Edge bản mới nhất';
+    if ($('conn-status')) {
+      $('conn-status').textContent = 'Lỗi WebGL — mở site trong tab mới, đóng tab game cũ, bật GPU acceleration.';
+    }
+    alert(tip);
+    return false;
+  }
 }
 
 function clearEntities() {
@@ -730,6 +802,7 @@ function updateDrone(dt) {
 }
 
 function updateTracers(dt) {
+  if (!state.scene) return;
   for (let i = state.tracers.length - 1; i >= 0; i--) {
     const t = state.tracers[i];
     t.life -= dt;
@@ -742,6 +815,7 @@ function updateTracers(dt) {
 }
 
 function animateRemote(dt) {
+  if (!state.scene) return;
   for (const [id, ch] of state.characters) {
     if (id === myId && state.playing && !state.droneMode) continue;
     animateCharacter(ch, true, dt * 0.3, false);
@@ -755,6 +829,7 @@ function animateRemote(dt) {
 
 function loop() {
   requestAnimationFrame(loop);
+  if (!state.renderer || !state.scene || !state.camera) return;
   const dt = Math.min(0.05, state.clock.getDelta());
   if (state.droneMode) updateDrone(dt);
   else if (state.playing) updateLocal(dt);
@@ -774,6 +849,7 @@ function loop() {
 // ——— Menu bindings ———
 function bindUI() {
   $('btn-create-room').onclick = async () => {
+    if (!ensureThree()) return;
     try {
       await ensureConnected();
       socket.emit('room:create', { name: playerName() }, (res) => {
@@ -785,13 +861,14 @@ function bindUI() {
         addChat({ system: true, text: 'Phòng đã tạo. Chia sẻ mã để mời bạn bè.' });
       });
     } catch {
-      alert('Không kết nối được server. Chạy: npm start');
+      alert('Online cần game server. Trên Vercel hãy chơi Bot offline.');
     }
   };
 
   $('btn-join-room').onclick = () => showScreen('join-screen');
   $('btn-back-join').onclick = () => showScreen('main-menu');
   $('btn-confirm-join').onclick = async () => {
+    if (!ensureThree()) return;
     try {
       await ensureConnected();
       const code = $('room-code-input').value.trim().toUpperCase();
@@ -802,14 +879,15 @@ function bindUI() {
         showScreen('lobby-screen');
       });
     } catch {
-      alert('Không kết nối được server');
+      alert('Online cần game server. Trên Vercel hãy chơi Bot offline.');
     }
   };
 
   $('btn-bot-game').onclick = async () => {
+    if (!ensureThree()) return;
     const btn = $('btn-bot-game');
     btn.disabled = true;
-    $('conn-status').textContent = 'Đang kết nối server...';
+    $('conn-status').textContent = 'Đang vào trận bot...';
     try {
       await ensureConnected();
       socket.emit('room:bot', { name: playerName(), mode: '5v5' }, (res) => {
@@ -821,18 +899,19 @@ function bindUI() {
         myId = socket.id;
         room = res.room;
         updateLobbyUI(res.room);
-        $('conn-status').textContent = 'Đã vào phòng bot 5v5 — chờ drone...';
+        $('conn-status').textContent = 'Bot 5v5 — chờ drone...';
         msg('Đang vào trận với bot...', 2000);
       });
     } catch (err) {
       btn.disabled = false;
       console.error(err);
-      $('conn-status').textContent = 'Không kết nối được. Chạy: npm start rồi mở http://localhost:3000';
-      alert('Không kết nối được server.\n\n1) Mở terminal trong thư mục game\n2) Chạy: npm install && npm start\n3) Mở trình duyệt: http://localhost:3000\n\n(Không mở file index.html trực tiếp)');
+      $('conn-status').textContent = 'Lỗi khởi tạo trận';
+      alert('Không vào được trận bot. Thử tải lại trang.');
     }
   };
 
   $('btn-solo-10').onclick = async () => {
+    if (!ensureThree()) return;
     const btn = $('btn-solo-10');
     btn.disabled = true;
     $('conn-status').textContent = 'Đang tạo 1 vs 10...';
@@ -846,14 +925,14 @@ function bindUI() {
         }
         myId = socket.id;
         room = res.room;
-        $('conn-status').textContent = '1 vs 10 — AWP + AK47 sẵn sàng · V đổi súng';
+        $('conn-status').textContent = '1 vs 10 — AWP + AK47 · V đổi súng';
         msg('1 đấu 10 bot — trang bị AWP & AK47', 2500);
       });
     } catch (err) {
       btn.disabled = false;
       console.error(err);
-      $('conn-status').textContent = 'Không kết nối được server';
-      alert('Không kết nối được server. Chạy npm start rồi mở http://localhost:3000');
+      $('conn-status').textContent = 'Lỗi khởi tạo trận';
+      alert('Không vào được trận. Thử tải lại trang trong tab mới.');
     }
   };
 
@@ -933,16 +1012,29 @@ setTimeout(() => {
 bindUI();
 showScreen('main-menu');
 setHud(false);
+state.controls = new Controls(); // UI bindings before WebGL
 
-try {
-  initThree();
-  loop();
-  console.log('Block Tactical 5v5 ready');
-} catch (err) {
-  console.error(err);
-  const status = $('conn-status');
-  if (status) {
-    status.textContent = 'Lỗi WebGL / khởi tạo 3D. Hãy dùng Chrome/Edge và mở http://localhost:PORT (sau npm start).';
+// Warm up WebGL after first user gesture-friendly delay (menu still usable if it fails)
+function bootGraphics() {
+  try {
+    initThree();
+    state._loopStarted = true;
+    loop();
+    if ($('conn-status') && !$('conn-status').textContent) {
+      $('conn-status').textContent = 'Sẵn sàng — bấm 1 đấu 10 Bot để chơi trên Vercel';
+    }
+    console.log('Block Tactical 5v5 ready');
+  } catch (err) {
+    console.warn('Deferred WebGL init failed; will retry on Play', err);
+    if ($('conn-status')) {
+      $('conn-status').textContent = 'Đồ họa chưa sẵn sàng — bấm chơi để thử lại (mở tab đầy đủ, đóng tab game cũ).';
+    }
   }
-  alert('Không tạo được WebGL. Mở game qua http://localhost sau khi chạy npm start (không mở file HTML trực tiếp).');
+}
+
+// Prefer requestIdleCallback so the menu paints first on Vercel
+if (typeof requestIdleCallback === 'function') {
+  requestIdleCallback(() => bootGraphics(), { timeout: 1200 });
+} else {
+  setTimeout(bootGraphics, 100);
 }
