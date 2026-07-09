@@ -71,7 +71,6 @@ export function createLocalSocket() {
     clearTimers();
     // Skip drone — vào FPS ngay để nhập vai nhân vật
     room.startRound(SPAWNS, CRATE_SPOTS);
-    room.state = 'drone'; // beginPlaying() requires non-playing
     if (room.beginPlaying()) {
       room.combatAt = Date.now() + 2100;
       emitLocal('round:start', room.snapshot());
@@ -128,7 +127,7 @@ export function createLocalSocket() {
       }
       cb?.({ ok: true, room: room.snapshot() });
       emitLocal('room:update', room.snapshot());
-      droneTimer = setTimeout(beginRoundFlow, 400);
+      droneTimer = setTimeout(beginRoundFlow, 50);
       return;
     }
 
