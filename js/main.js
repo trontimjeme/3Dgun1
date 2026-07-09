@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { buildMap, createSky, resolveCollision } from './map.js';
 import { createCharacter, createWeaponMesh, animateCharacter, createWeaponCrate } from './character.js';
 import { Controls } from './controls.js';
-import { WEAPONS } from './weapons.js';
+import { WEAPONS, createWeaponState } from './weapons.js';
 import { createLocalSocket } from './localServer.js';
 
 const canvas = document.getElementById('game-canvas');
@@ -19,6 +19,7 @@ const state = {
   droneMode: false,
   droneAngle: 0,
   playing: false,
+  sandboxMode: false,
   mapData: null,
   scene: null,
   camera: null,
@@ -391,11 +392,14 @@ function ensureLocalPlayer(players) {
     localPlayer.alive = me.alive;
     if (me.weapon) localPlayer.weapon = me.weapon;
     if (me.loadout) localPlayer.loadout = me.loadout;
-    if (Number.isFinite(me.x)) localPlayer.x = me.x;
-    if (Number.isFinite(me.y)) localPlayer.y = me.y;
-    if (Number.isFinite(me.z)) localPlayer.z = me.z;
-    if (Number.isFinite(me.yaw)) localPlayer.yaw = me.yaw;
-    if (me.pitch != null) localPlayer.pitch = me.pitch;
+    // Sandbox: local sim owns position — don't snap back to static room snapshot
+    if (!state.sandboxMode) {
+      if (Number.isFinite(me.x)) localPlayer.x = me.x;
+      if (Number.isFinite(me.y)) localPlayer.y = me.y;
+      if (Number.isFinite(me.z)) localPlayer.z = me.z;
+      if (Number.isFinite(me.yaw)) localPlayer.yaw = me.yaw;
+      if (me.pitch != null) localPlayer.pitch = me.pitch;
+    }
   }
   return localPlayer;
 }
@@ -485,6 +489,34 @@ function enterPlayerView(snap) {
   forceRenderFrames(3);
 }
 
+function returnToMenu() {
+  $('result-overlay').classList.add('hidden');
+  $('countdown-overlay')?.classList.add('hidden');
+  if (state._countdownIv) {
+    clearInterval(state._countdownIv);
+    state._countdownIv = null;
+  }
+  clearEntities();
+  document.exitPointerLock?.();
+  if (!state.sandboxMode) {
+    socket?.disconnect();
+    socket = null;
+  }
+  setHud(false);
+  showScreen('main-menu');
+  state.playing = false;
+  state.sandboxMode = false;
+  state.combatReady = false;
+  state.droneMode = false;
+  state.mode = null;
+  localPlayer = null;
+  if (state.controls) {
+    state.controls.enabled = false;
+    state.controls.sandboxMouse = false;
+  }
+  $('conn-status').textContent = 'Sẵn sàng — bấm Test 1 mình hoặc 1 đấu 10 Bot';
+}
+
 function showLegoControls() {
   setHud(true);
   const tc = $('touch-controls');
@@ -500,6 +532,81 @@ function showLegoControls() {
   // Hide spectator drone button — match is always character POV
   const droneBtn = $('btn-drone-cam');
   if (droneBtn) droneBtn.classList.add('hidden');
+}
+
+function startSandbox() {
+  if (!ensureThree()) return;
+  if (state._countdownIv) {
+    clearInterval(state._countdownIv);
+    state._countdownIv = null;
+  }
+  state.playing = false;
+  state.droneMode = false;
+  state.combatReady = false;
+  clearEntities();
+  state.sandboxMode = true;
+  state.mode = 'sandbox';
+  myId = 'sandbox_player';
+
+  const ak = createWeaponState('AK47');
+  const m4 = createWeaponState('M4A1');
+  const me = {
+    id: myId,
+    name: playerName() || 'Tester',
+    team: 'CT',
+    isBot: false,
+    ready: true,
+    hp: 100,
+    alive: true,
+    x: 0,
+    y: 0,
+    z: 14,
+    yaw: Math.PI,
+    pitch: 0,
+    weapon: ak,
+    loadout: { slots: [ak, m4], active: 0 },
+    kills: 0,
+    deaths: 0,
+  };
+
+  const snap = {
+    code: 'TEST',
+    state: 'playing',
+    sandboxMode: true,
+    timer: 9999,
+    scores: { CT: 0, T: 0 },
+    players: [me],
+    crates: [],
+  };
+
+  room = snap;
+  if (state.controls) {
+    state.controls.sandboxMouse = true;
+  }
+  $('alive-count').textContent = 'TEST 1 mình';
+  $('conn-status').textContent = 'Chế độ test — di chuyển / bắn / nhảy / nạp đạn';
+  startPlaying(snap);
+}
+
+function localReload() {
+  if (!localPlayer?.weapon) return;
+  const w = WEAPONS[localPlayer.weapon.id];
+  if (!w || localPlayer.weapon.reloading) return;
+  if (localPlayer.weapon.clip >= w.clipSize || localPlayer.weapon.reserve <= 0) {
+    msg('Không cần nạp đạn', 1000);
+    return;
+  }
+  localPlayer.weapon.reloading = true;
+  msg('Đang nạp đạn...', Math.round(w.reloadTime * 1000));
+  setTimeout(() => {
+    if (!localPlayer?.weapon) return;
+    const need = w.clipSize - localPlayer.weapon.clip;
+    const take = Math.min(need, localPlayer.weapon.reserve);
+    localPlayer.weapon.clip += take;
+    localPlayer.weapon.reserve -= take;
+    localPlayer.weapon.reloading = false;
+    updateHudFromPlayer(localPlayer, room);
+  }, w.reloadTime * 1000);
 }
 
 function startPlaying(snap) {
@@ -551,6 +658,7 @@ function startPlaying(snap) {
     state.controls.ads = false;
   }
   state.combatReady = false;
+  const isSandbox = !!(snap.sandboxMode || state.sandboxMode);
 
   document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
   $('click-hint')?.classList.add('hidden');
@@ -578,7 +686,14 @@ function startPlaying(snap) {
     $('click-hint')?.classList.remove('hidden');
   }
 
-  if (state._countdownIv) clearInterval(state._countdownIv);
+  if (isSandbox) {
+    state.combatReady = true;
+    $('countdown-overlay').classList.add('hidden');
+    msg('TEST 1 MÌNH — WASD / joystick di chuyển · giữ chuột trên map để nhìn · BẮN / Space nhảy · R nạp', 6000);
+    $('click-hint')?.classList.remove('hidden');
+    $('click-hint').innerHTML = 'Giữ chuột trên map để nhìn · LMB bắn · WASD di chuyển<br><small>Hoặc click để khóa chuột (CS mode)</small>';
+  } else if (state._countdownIv) clearInterval(state._countdownIv);
+  if (!isSandbox) {
   let n = 3;
   $('countdown-overlay').classList.remove('hidden');
   $('countdown-num').textContent = n;
@@ -598,6 +713,7 @@ function startPlaying(snap) {
       $('countdown-num').textContent = n;
     }
   }, 700);
+  }
   updateHudFromPlayer(localPlayer, snap);
   console.log('FPS + LEGO controls locked', { myId, x: localPlayer.x, z: localPlayer.z, weapon: localPlayer.weapon?.id, camY: state.camera?.position.y });
 }
@@ -910,17 +1026,21 @@ function updateLocal(dt) {
 
   // Actions
   if (ctrl.consumePress('reload') && localPlayer.weapon) {
-    socket.emit('player:reload');
+    if (state.sandboxMode) localReload();
+    else socket?.emit('player:reload');
   }
-  if (ctrl.consumePress('pickup')) tryPickup();
+  if (ctrl.consumePress('pickup')) {
+    if (state.sandboxMode) msg('Chế độ test — không có hộp súng', 1200);
+    else tryPickup();
+  }
   if (ctrl.consumePress('switchWeapon')) {
-    socket.emit('player:switchWeapon');
-    // Optimistic local switch
+    if (!state.sandboxMode) socket?.emit('player:switchWeapon');
     if (localPlayer.loadout?.slots?.length > 1) {
       if (localPlayer.weapon) localPlayer.loadout.slots[localPlayer.loadout.active] = localPlayer.weapon;
       localPlayer.loadout.active = (localPlayer.loadout.active + 1) % localPlayer.loadout.slots.length;
       localPlayer.weapon = localPlayer.loadout.slots[localPlayer.loadout.active];
       msg(`Đổi sang ${WEAPONS[localPlayer.weapon.id]?.name}`, 1000);
+      updateHudFromPlayer(localPlayer, room);
     }
   }
   // Ignore drone peek — stay in character POV
@@ -932,17 +1052,30 @@ function updateLocal(dt) {
   const wantFire = ctrl.fire || ctrl.consumePress('fire');
   if (wantFire) tryShoot();
 
-  // Sync to server
-  socket.emit('player:update', {
-    x: localPlayer.x,
-    y: localPlayer.y,
-    z: localPlayer.z,
-    yaw: localPlayer.yaw,
-    pitch: localPlayer.pitch,
-    prone: localPlayer.prone,
-    ads: localPlayer.ads,
-    sprinting: localPlayer.sprinting,
-  });
+  // Sync to server (skip in offline sandbox)
+  if (!state.sandboxMode) {
+    socket?.emit('player:update', {
+      x: localPlayer.x,
+      y: localPlayer.y,
+      z: localPlayer.z,
+      yaw: localPlayer.yaw,
+      pitch: localPlayer.pitch,
+      prone: localPlayer.prone,
+      ads: localPlayer.ads,
+      sprinting: localPlayer.sprinting,
+    });
+  } else if (room?.players?.length) {
+    const me = room.players.find((p) => p.id === myId) || room.players[0];
+    me.x = localPlayer.x;
+    me.y = localPlayer.y;
+    me.z = localPlayer.z;
+    me.yaw = localPlayer.yaw;
+    me.pitch = localPlayer.pitch;
+    me.prone = localPlayer.prone;
+    me.ads = localPlayer.ads;
+    me.sprinting = localPlayer.sprinting;
+    if (localPlayer.weapon) me.weapon = localPlayer.weapon;
+  }
 
   updateHudFromPlayer(localPlayer, room);
 }
@@ -1008,8 +1141,11 @@ function tryShoot() {
     }
   }
 
-  socket.emit('player:shoot', { origin, dir: { x: dir.x, y: dir.y, z: dir.z }, hitPlayerId });
+  if (!state.sandboxMode) {
+    socket?.emit('player:shoot', { origin, dir: { x: dir.x, y: dir.y, z: dir.z }, hitPlayerId });
+  }
   spawnTracer(origin, { x: dir.x, y: dir.y, z: dir.z });
+  updateHudFromPlayer(localPlayer, room);
 }
 
 function toggleDronePeek() {
@@ -1164,6 +1300,22 @@ function bindUI() {
     }
   };
 
+  $('btn-solo-test').onclick = () => {
+    if (!ensureThree()) return;
+    const btn = $('btn-solo-test');
+    btn.disabled = true;
+    $('conn-status').textContent = 'Đang vào chế độ test 1 mình...';
+    try {
+      startSandbox();
+    } catch (err) {
+      console.error(err);
+      $('conn-status').textContent = 'Lỗi khởi tạo test';
+      alert('Không vào được chế độ test. Thử tải lại trang.');
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
   $('btn-solo-10').onclick = async () => {
     if (!ensureThree()) return;
     const btn = $('btn-solo-10');
@@ -1247,16 +1399,13 @@ function bindUI() {
     }
   });
 
-  $('btn-result-menu').onclick = () => {
-    $('result-overlay').classList.add('hidden');
-    clearEntities();
-    socket?.disconnect();
-    socket = null;
-    setHud(false);
-    showScreen('main-menu');
-    state.playing = false;
-    state.droneMode = false;
-  };
+  $('btn-result-menu').onclick = () => returnToMenu();
+
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Escape' && state.sandboxMode && state.playing) {
+      returnToMenu();
+    }
+  });
 
   // Random default name
   const names = ['Ghost', 'Viper', 'Nova', 'Brick', 'Echo', 'Raptor', 'Shade', 'Bolt'];
@@ -1275,6 +1424,7 @@ function ensureConnected() {
 // Debug hook for automated tests
 window.__GAME_DEBUG__ = () => ({
   playing: state.playing,
+  sandboxMode: state.sandboxMode,
   screen: state.screen,
   camLocalY: state.camera?.position.y,
   camWorldY: getCameraWorldY(),
@@ -1283,6 +1433,8 @@ window.__GAME_DEBUG__ = () => ({
   camParent: state.camera?.parent?.name || null,
   player: localPlayer ? { x: localPlayer.x, z: localPlayer.z, yaw: localPlayer.yaw } : null,
   hud: !$('game-hud')?.classList.contains('hidden'),
+  controlsEnabled: state.controls?.enabled,
+  ctrlMove: state.controls ? { x: state.controls.move.x, y: state.controls.move.y } : null,
 });
 setTimeout(() => {
   if (!socket && $('conn-status') && !$('conn-status').textContent) {
@@ -1306,7 +1458,7 @@ function bootGraphics() {
     state._loopStarted = true;
     loop();
     if ($('conn-status') && !$('conn-status').textContent) {
-      $('conn-status').textContent = 'Sẵn sàng — bấm 1 đấu 10 Bot để chơi trên Vercel';
+      $('conn-status').textContent = 'Sẵn sàng — bấm Test 1 mình hoặc 1 đấu 10 Bot';
     }
     console.log('Block Tactical 5v5 ready');
   } catch (err) {

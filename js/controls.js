@@ -26,6 +26,10 @@ export class Controls {
     this.dronePressed = false;
     this.pointerLocked = false;
     this.enabled = false;
+    /** Sandbox: mouse look/fire without pointer lock */
+    this.sandboxMouse = false;
+    this._sandboxLook = false;
+    this._lastSandboxLook = null;
 
     this._keys = new Set();
     this._joyPointer = null;
@@ -68,6 +72,22 @@ export class Controls {
       if (!this._isTouchDevice()) canvas?.requestPointerLock?.();
     };
     canvas?.addEventListener('click', tryLock);
+
+    // Sandbox: hold mouse on canvas to look around without pointer lock
+    canvas?.addEventListener('pointerdown', (e) => {
+      if (!this.enabled || !this.sandboxMouse || this.pointerLocked) return;
+      if (e.pointerType === 'mouse' && e.button === 0) {
+        this._sandboxLook = true;
+        this._lastSandboxLook = { x: e.clientX, y: e.clientY };
+      }
+    });
+    const endSandboxLook = () => {
+      this._sandboxLook = false;
+      this._lastSandboxLook = null;
+    };
+    canvas?.addEventListener('pointerup', endSandboxLook);
+    canvas?.addEventListener('pointerleave', endSandboxLook);
+
     lookZone?.addEventListener('click', tryLock);
 
     document.addEventListener('pointerlockchange', () => {
@@ -79,20 +99,38 @@ export class Controls {
     });
 
     document.addEventListener('mousemove', (e) => {
-      if (!this.enabled || !this.pointerLocked) return;
-      this.lookDelta.x += e.movementX;
-      this.lookDelta.y += e.movementY;
+      if (!this.enabled) return;
+      if (this.pointerLocked) {
+        this.lookDelta.x += e.movementX;
+        this.lookDelta.y += e.movementY;
+        return;
+      }
+      // Sandbox test: drag on canvas to look (no pointer lock needed)
+      if (this.sandboxMouse && this._sandboxLook && this._lastSandboxLook) {
+        this.lookDelta.x += (e.clientX - this._lastSandboxLook.x) * 0.8;
+        this.lookDelta.y += (e.clientY - this._lastSandboxLook.y) * 0.8;
+        this._lastSandboxLook = { x: e.clientX, y: e.clientY };
+      }
     });
 
     // Reference: LMB = shoot, RMB = zoom cycle
     document.addEventListener('mousedown', (e) => {
-      if (!this.enabled || !this.pointerLocked) return;
-      if (e.button === 0) {
+      if (!this.enabled) return;
+      if (this.pointerLocked) {
+        if (e.button === 0) {
+          this.fire = true;
+          this.firePressed = true;
+          this._fireHeld = true;
+        } else if (e.button === 2) {
+          this._cycleScope();
+        }
+        return;
+      }
+      // Sandbox: LMB on canvas fires without pointer lock
+      if (this.sandboxMouse && e.button === 0 && e.target?.id === 'game-canvas') {
         this.fire = true;
         this.firePressed = true;
         this._fireHeld = true;
-      } else if (e.button === 2) {
-        this._cycleScope();
       }
     });
     document.addEventListener('mouseup', (e) => {
@@ -104,7 +142,7 @@ export class Controls {
     document.addEventListener('contextmenu', (e) => e.preventDefault());
 
     this._setupJoystick();
-    this._setupActions();
+    this._setupButtons();
     this._setupLookZone();
   }
 
