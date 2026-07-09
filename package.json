@@ -1,0 +1,25 @@
+{
+  "name": "block-tactical-5v5",
+  "version": "1.0.0",
+  "description": "CS:GO-style 5v5 blocky tactical shooter — web & mobile",
+  "main": "server/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js",
+    "server": "node server/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/trontimjeme/3dgun1.git"
+  },
+  "keywords": ["threejs", "fps", "multiplayer", "csgo"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1",
+    "three": "^0.170.0"
+  }
+}

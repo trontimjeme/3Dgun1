@@ -1,4 +1,3 @@
-// Sửa file này sau khi deploy game server (Render/Railway/VPS).
-// Ví dụ: window.GAME_SERVER_URL = "https://voxel-hide-seek.onrender.com";
-// Để trống ("") khi chạy local bằng `node server/index.js`.
+// Để trống ("") khi chạy local bằng `npm start` (cùng origin).
+// Sau khi deploy server: window.GAME_SERVER_URL = "https://your-server.onrender.com";
 window.GAME_SERVER_URL = "";
