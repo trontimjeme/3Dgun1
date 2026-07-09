@@ -106,6 +106,27 @@ export function createCharacter(team = 'CT', variant = 0) {
   weaponMount.position.set(0.35, 1.1, 0.35);
   root.add(weaponMount);
 
+  // Default "YOU" marker (hidden until assigned to local player)
+  const youMarker = new THREE.Mesh(
+    new THREE.ConeGeometry(0.28, 0.55, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffe066 })
+  );
+  youMarker.position.y = 2.85;
+  youMarker.rotation.x = Math.PI;
+  youMarker.visible = false;
+  root.add(youMarker);
+
+  // Team ring under feet for CT (player) clarity
+  if (team === 'CT') {
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.55, 0.75, 24),
+      new THREE.MeshBasicMaterial({ color: 0x3d8bfd, side: THREE.DoubleSide, transparent: true, opacity: 0.85 })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.05;
+    root.add(ring);
+  }
+
   root.userData = {
     team,
     body,
@@ -114,6 +135,7 @@ export function createCharacter(team = 'CT', variant = 0) {
     legL,
     legR,
     weaponMount,
+    youMarker,
     animPhase: Math.random() * Math.PI * 2,
   };
 

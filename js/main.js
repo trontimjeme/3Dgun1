@@ -265,25 +265,43 @@ function syncPlayers(players) {
       state.scene.add(ch);
       state.characters.set(p.id, ch);
     }
-    // Don't override local player transform while playing (we predict)
+    // Local player: we predict transform while playing, but KEEP visible (3rd person)
     if (p.id === myId && state.playing && !state.droneMode) {
-      ch.visible = false;
+      ch.visible = !!p.alive;
+      ch.scale.set(1.2, 1.2, 1.2);
+      if (ch.userData.youMarker) ch.userData.youMarker.visible = true;
+      // Still sync weapon mesh
+      const mount = ch.userData.weaponMount;
+      const wid = p.weapon?.id;
+      if (wid && wid !== 'FIST' && mount.userData.wid !== wid) {
+        while (mount.children.length) mount.remove(mount.children[0]);
+        mount.add(createWeaponMesh(wid));
+        mount.userData.wid = wid;
+      } else if ((!wid || wid === 'FIST') && mount.children.length) {
+        while (mount.children.length) mount.remove(mount.children[0]);
+        mount.userData.wid = wid || null;
+      }
       continue;
     }
     ch.position.set(p.x, p.y, p.z);
     ch.rotation.y = p.yaw;
     ch.visible = p.alive;
+    if (p.id === myId) {
+      ch.scale.set(1.35, 1.35, 1.35);
+    } else {
+      ch.scale.set(1, 1, 1);
+    }
     if (p.prone) animateCharacter(ch, false, 0, true);
     // Weapon mesh
     const mount = ch.userData.weaponMount;
     const wid = p.weapon?.id;
-    if (wid && mount.userData.wid !== wid) {
+    if (wid && wid !== 'FIST' && mount.userData.wid !== wid) {
       while (mount.children.length) mount.remove(mount.children[0]);
       mount.add(createWeaponMesh(wid));
       mount.userData.wid = wid;
-    } else if (!wid && mount.children.length) {
+    } else if ((!wid || wid === 'FIST') && mount.children.length) {
       while (mount.children.length) mount.remove(mount.children[0]);
-      mount.userData.wid = null;
+      mount.userData.wid = wid || null;
     }
   }
   for (const id of state.characters.keys()) {
@@ -328,13 +346,25 @@ function startDroneView(snap) {
   state.controls.enabled = false;
   setHud(true);
   $('drone-banner').classList.remove('hidden');
+  $('drone-banner').textContent = 'CAMERA TOÀN CẢNH — Chạm / click để VÀO TRẬN';
   $('countdown-overlay').classList.add('hidden');
   syncPlayers(snap.players);
   syncCrates(snap.crates);
   const me = snap.players.find((p) => p.id === myId);
   localPlayer = me ? { ...me } : null;
+  // Highlight "you" during drone overview
+  for (const [id, ch] of state.characters) {
+    ch.visible = true;
+    if (id === myId) {
+      ch.scale.set(1.4, 1.4, 1.4);
+      if (ch.userData.youMarker) ch.userData.youMarker.visible = true;
+    } else {
+      ch.scale.set(1, 1, 1);
+      if (ch.userData.youMarker) ch.userData.youMarker.visible = false;
+    }
+  }
   updateHudFromPlayer(localPlayer, snap);
-  msg('Drone toàn cảnh — xem map trước khi vào trận', 4000);
+  msg('Bạn = nhân vật CT (vòng xanh + mũi tên vàng) · Chạm màn hình để vào trận', 5000);
 }
 
 function startPlaying(snap) {
@@ -344,7 +374,9 @@ function startPlaying(snap) {
   state.controls.scopeLevel = 0;
   state.controls.ads = false;
   state.combatReady = false;
+  state.thirdPerson = true; // thấy nhân vật chính của mình
   $('drone-banner').classList.add('hidden');
+  setHud(true);
   syncPlayers(snap.players);
   syncCrates(snap.crates);
   const me = snap.players.find((p) => p.id === myId);
@@ -357,6 +389,14 @@ function startPlaying(snap) {
       weapon: me.weapon,
     };
   }
+  // Keep local character VISIBLE (third-person) + you-marker
+  const myChar = state.characters.get(myId);
+  if (myChar) {
+    myChar.visible = true;
+    myChar.scale.set(1.2, 1.2, 1.2);
+    if (myChar.userData.youMarker) myChar.userData.youMarker.visible = true;
+  }
+
   // Countdown — cả hai bên vào cùng lúc sau 3-2-1
   let n = 3;
   $('countdown-overlay').classList.remove('hidden');
@@ -368,7 +408,7 @@ function startPlaying(snap) {
       $('countdown-overlay').classList.add('hidden');
       state.combatReady = true;
       if (snap.soloMode) {
-        msg('1 vs 10 — Bot tay không (10 đấm mới chết) · V đổi AWP/AK47!', 4000);
+        msg('ĐÂY LÀ BẠN (mũi tên vàng) — Bot tay không · V đổi súng!', 4000);
       } else {
         msg(localPlayer?.team === 'CT' ? 'BẢO VỆ — Tiêu diệt Terrorist!' : 'TẤN CÔNG — Tiêu diệt CT!', 3000);
       }
@@ -652,30 +692,37 @@ function updateLocal(dt) {
   localPlayer.x = pos.x;
   localPlayer.z = pos.z;
 
-  // Character visual — hide own body in first-person
+  // Character visual — third-person: KEEP own body visible with "YOU" marker
   const ch = state.characters.get(myId);
   if (ch) {
     ch.position.set(localPlayer.x, localPlayer.y, localPlayer.z);
     ch.rotation.y = localPlayer.yaw;
     animateCharacter(ch, !!(mx || my), dt, localPlayer.prone);
-    ch.visible = false;
+    ch.visible = true;
+    ch.scale.set(1.2, 1.2, 1.2);
+    if (ch.userData.youMarker) ch.userData.youMarker.visible = true;
   }
 
-  // Camera first-person
+  // Camera: third-person over-shoulder so you always see YOUR character
   const eye = localPlayer.prone ? 0.45 : 1.65;
   state.eyeHeight = eye;
-  state.camera.position.set(localPlayer.x, localPlayer.y + eye, localPlayer.z);
+  const back = 4.2;
+  const height = localPlayer.prone ? 2.2 : 3.0;
+  const camX = localPlayer.x - Math.sin(localPlayer.yaw) * back;
+  const camZ = localPlayer.z - Math.cos(localPlayer.yaw) * back;
+  const camY = localPlayer.y + height;
+  state.camera.position.set(camX, camY, camZ);
   const lookAt = new THREE.Vector3(
-    localPlayer.x + Math.sin(localPlayer.yaw) * Math.cos(localPlayer.pitch),
-    localPlayer.y + eye + Math.sin(localPlayer.pitch),
-    localPlayer.z + Math.cos(localPlayer.yaw) * Math.cos(localPlayer.pitch)
+    localPlayer.x + Math.sin(localPlayer.yaw) * Math.cos(localPlayer.pitch) * 8,
+    localPlayer.y + eye + Math.sin(localPlayer.pitch) * 4,
+    localPlayer.z + Math.cos(localPlayer.yaw) * Math.cos(localPlayer.pitch) * 8
   );
   state.camera.lookAt(lookAt);
-  state.camera.fov = ctrl.fovForScope(75);
+  state.camera.fov = ctrl.fovForScope(70);
   state.camera.updateProjectionMatrix();
 
-  // First-person weapon viewmodel
-  updateViewmodel(localPlayer);
+  // Hide FPS viewmodel in third-person (character holds the gun)
+  if (state.viewmodel) state.viewmodel.visible = false;
 
   // Actions
   if (ctrl.consumePress('reload') && localPlayer.weapon) {
@@ -799,7 +846,16 @@ function updateDrone(dt) {
   const x = Math.cos(state.droneAngle) * r;
   const z = Math.sin(state.droneAngle) * r;
   state.camera.position.set(x, h, z);
-  state.camera.lookAt(0, 2, 0);
+  // Highlight local player during drone — follow them a bit
+  if (localPlayer) {
+    // Soft look-at player while still orbiting map
+    const mix = 0.35;
+    const lookX = localPlayer.x * mix;
+    const lookZ = localPlayer.z * mix;
+    state.camera.lookAt(lookX, 1.5, lookZ);
+  } else {
+    state.camera.lookAt(0, 2, 0);
+  }
   state.camera.fov = 55;
   state.camera.updateProjectionMatrix();
 
@@ -976,12 +1032,19 @@ function bindUI() {
   };
 
   $('drone-banner').onclick = () => {
-    if (room?.state === 'drone' || (!state.playing && state.droneMode)) {
+    if (state.droneMode && !state.playing) {
       socket?.emit('round:skipDrone');
-    } else {
-      toggleDronePeek();
+      return;
     }
+    toggleDronePeek();
   };
+
+  // Tap/click anywhere during drone intro to enter the match as YOU
+  canvas.addEventListener('pointerdown', () => {
+    if (state.droneMode && !state.playing) {
+      socket?.emit('round:skipDrone');
+    }
+  });
 
   $('btn-result-menu').onclick = () => {
     $('result-overlay').classList.add('hidden');
