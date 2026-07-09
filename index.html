@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trốn Đi Mày Ơi — Trốn Tìm Voxel 3D</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- Menu chính -->
+  <div id="main-menu" class="screen active menu-glass">
+    <div class="menu-panel">
+      <h1 class="game-title">🙈 TRỐN ĐI MÀY ƠI</h1>
+      <p class="subtitle">Hút màu môi trường → vẽ ngụy trang từng pixel → hóa thân vào thành phố voxel</p>
+      <div class="name-row">
+        <input type="text" id="player-name" placeholder="Tên của bạn" maxlength="16" value="">
+        <button id="btn-random-name" class="btn-mini" title="Đổi tên ngẫu nhiên">🎲</button>
+      </div>
+      <label class="map-select-row">Map:
+        <select id="map-select"><option value="">🏙️ Thành phố ngẫu nhiên</option></select>
+      </label>
+      <div class="menu-buttons">
+        <button id="btn-create-room" class="btn primary">🌐 Tạo Phòng (Online)</button>
+        <button id="btn-join-room" class="btn">🔑 Vào Phòng Bằng Mã</button>
+        <button id="btn-bot-game" class="btn accent">🤖 Chơi BOT 5v5</button>
+        <button id="btn-map-editor" class="btn">🧱 Tạo Map Mới (Block)</button>
+        <button id="btn-import-map" class="btn">📥 Up File SketchUp / OBJ</button>
+        <button id="btn-skin-editor" class="btn">🎨 Tùy Chỉnh Skin</button>
+      </div>
+      <p id="conn-status" class="conn-status"></p>
+    </div>
+  </div>
+
+  <!-- Join room -->
+  <div id="join-screen" class="screen">
+    <div class="menu-panel">
+      <h2>Vào Phòng</h2>
+      <input type="text" id="room-code-input" placeholder="Mã phòng (6 ký tự)" maxlength="6" autocomplete="off">
+      <button id="btn-confirm-join" class="btn primary">Tham Gia</button>
+      <button id="btn-back-join" class="btn ghost">Quay Lại</button>
+    </div>
+  </div>
+
+  <!-- Lobby -->
+  <div id="lobby-screen" class="screen">
+    <div class="menu-panel wide">
+      <h2>Phòng: <span id="lobby-code">------</span> <button id="btn-copy-code" class="btn-mini" title="Copy mã">📋</button></h2>
+      <p id="lobby-mode">Chế độ: PvP — 2 vòng, hoán đổi vai trò</p>
+      <div id="player-list" class="player-list"></div>
+      <div class="lobby-actions">
+        <button id="btn-ready" class="btn primary">Sẵn Sàng</button>
+        <button id="btn-start-game" class="btn accent hidden">Bắt Đầu</button>
+        <button id="btn-leave-lobby" class="btn ghost">Rời Phòng</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Skin editor -->
+  <div id="skin-screen" class="screen">
+    <div class="menu-panel wide">
+      <h2>Tùy Chỉnh Skin Nhân Vật</h2>
+      <p class="subtitle">Vẽ trực tiếp lên sơ đồ cơ thể (đầu / thân / tay / chân) hoặc upload ảnh 64×128.</p>
+      <div class="skin-editor-layout">
+        <canvas id="skin-canvas" width="64" height="128"></canvas>
+        <div class="skin-tools">
+          <input type="file" id="skin-file" accept="image/png,image/jpeg">
+          <input type="color" id="skin-color" value="#3b82c4">
+          <button id="btn-skin-fill" class="btn">Tô Toàn Bộ</button>
+          <button id="btn-skin-clear" class="btn ghost">Đặt Lại</button>
+          <button id="btn-skin-save" class="btn primary">💾 Lưu Skin</button>
+          <button id="btn-skin-back" class="btn ghost">Quay Lại</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Map editor -->
+  <div id="editor-screen" class="screen transparent">
+    <div id="editor-ui">
+      <div class="editor-toolbar">
+        <h3>🧱 Map Editor</h3>
+        <select id="block-type">
+          <option value="grass">🌿 Cỏ</option>
+          <option value="stone">🪨 Đá</option>
+          <option value="cobble">🧱 Đá cuội</option>
+          <option value="wood">🌳 Gỗ (thân cây)</option>
+          <option value="plank">🪵 Ván gỗ</option>
+          <option value="brick">🧱 Gạch</option>
+          <option value="concrete">🏢 Bê tông</option>
+          <option value="glass">🪟 Kính</option>
+          <option value="sand">🏖️ Cát</option>
+          <option value="water">💧 Nước</option>
+          <option value="leaves">🍃 Lá</option>
+          <option value="metal">⚙️ Kim loại</option>
+          <option value="roof">🏠 Ngói</option>
+          <option value="road">🛣️ Đường</option>
+          <option value="gravel">🪨 Sỏi</option>
+          <option value="snow">❄️ Tuyết</option>
+          <option value="ice">🧊 Băng</option>
+          <option value="clay">🏺 Đất sét</option>
+          <option value="moss">🌱 Rêu</option>
+          <option value="basalt">🌋 Bazan</option>
+          <option value="sandstone">🏜️ Đá cát</option>
+          <option value="obsidian">🖤 Obsidian</option>
+          <option value="terracotta">🧱 Gốm nung</option>
+          <option value="hay">🌾 Rơm</option>
+          <option value="marble">⬜ Cẩm thạch</option>
+          <option value="slate">🪨 Đá phiến</option>
+          <option value="coal">⚫ Than</option>
+          <option value="copper">🟠 Đồng</option>
+          <option value="bamboo">🎍 Tre</option>
+          <option value="mud">🟤 Bùn</option>
+          <option value="cactus">🌵 Xương rồng</option>
+          <option value="lava">🔥 Dung nham</option>
+          <option value="coral">🪸 San hô</option>
+          <option value="mushroom">🍄 Nấm</option>
+        </select>
+        <button id="btn-editor-save" class="btn primary">💾 Lưu Map</button>
+        <button id="btn-editor-load" class="btn">📂 Tải Map</button>
+        <button id="btn-editor-clear" class="btn ghost">🗑️ Xóa Hết</button>
+        <button id="btn-editor-back" class="btn ghost">← Quay Lại</button>
+      </div>
+      <p class="editor-hint">Trái: đặt block • Phải (click nhanh): xóa • Phải (giữ + kéo): xoay camera • WASD di chuyển • Space/E lên, Q/Ctrl xuống • Shift bay nhanh</p>
+    </div>
+  </div>
+
+  <!-- Import map -->
+  <div id="import-screen" class="screen">
+    <div class="menu-panel wide">
+      <h2>📥 Up File SketchUp / OBJ → Voxel Map</h2>
+      <p class="subtitle">
+        Cách 1: SketchUp → File → Export → 3D Model → <strong>.obj</strong><br>
+        Cách 2: dùng plugin <strong>X Hunt Map Exporter</strong> trong SketchUp → xuất <strong>.json</strong> (hỗ trợ tag game:wall, game:roof, game:window...)
+      </p>
+      <input type="file" id="map-file-input" accept=".obj,.json">
+      <div class="import-settings">
+        <label>Kích thước voxel: <input type="range" id="voxel-size" min="0.25" max="3" step="0.05" value="1"> <span id="voxel-size-val">1.00</span> m/block</label>
+      </div>
+      <button id="btn-import-convert" class="btn primary">Chuyển Đổi &amp; Lưu</button>
+      <button id="btn-import-preview" class="btn">Xem Trước Trong Editor</button>
+      <button id="btn-import-back" class="btn ghost">Quay Lại</button>
+      <div id="import-progress" class="hidden"></div>
+    </div>
+  </div>
+
+  <!-- Game HUD -->
+  <div id="game-hud" class="hidden">
+    <div id="hud-top">
+      <div id="role-badge"></div>
+      <div id="round-info"></div>
+      <div id="miss-counter" class="hidden"></div>
+      <div id="timer-display">00:00</div>
+    </div>
+
+    <div id="blackout-overlay" class="hidden">
+      <div class="blackout-content">
+        <div class="blackout-eye">🕶️</div>
+        <div>Màn đen — Hiders đang ẩn nấp...</div>
+        <div class="blackout-num"><span id="blackout-remaining">30</span>s</div>
+      </div>
+    </div>
+
+    <div id="countdown-overlay" class="hidden"><span id="countdown-num">5</span></div>
+    <div id="crosshair"><span></span></div>
+
+    <!-- Thanh công cụ 2: tư thế hóa thân -->
+    <div id="pose-bar" class="hidden"></div>
+
+    <!-- Menu kỹ năng hình tròn trong suốt (G) -->
+    <div id="skill-wheel" class="hidden"></div>
+    <button id="btn-skill-wheel" class="skill-wheel-btn hidden" title="Menu kỹ năng (G)">🎯</button>
+    <button id="btn-drone" class="skill-wheel-btn drone hidden" title="Drone toàn cảnh (M)">🚁</button>
+
+    <div id="hud-bottom">
+      <!-- Thanh công cụ 1: hút màu + cọ tròn -->
+      <button id="btn-camo-show" class="camo-show-btn hidden" title="Mở công cụ ngụy trang (C)">🎨</button>
+      <div id="camo-panel" class="hidden">
+        <div class="camo-header">
+          <span>🎨 Ngụy trang</span>
+          <button id="btn-eyedropper" class="tool-btn" title="Hút màu (E)">💧</button>
+          <span id="picked-color" title="Màu đang chọn"></span>
+          <button id="btn-camo-toggle" class="tool-btn close" title="Ẩn bảng công cụ (C)">✕</button>
+        </div>
+        <div class="camo-body">
+          <canvas id="camo-preview" width="64" height="128"></canvas>
+          <div class="brush-tools">
+            <div class="tool-row">
+              <button id="btn-tool-brush" class="tool-btn on" title="Cọ tròn (B)">🖌️</button>
+              <button id="btn-tool-pencil" class="tool-btn" title="Bút vẽ nhỏ 1px — nét chi tiết như Paint (P)">✏️</button>
+            </div>
+            <div class="brush-preview"><span id="brush-dot"></span></div>
+            <label class="brush-label" id="brush-label">Cọ tròn: <span id="brush-size-val">3</span>px</label>
+            <input type="range" id="brush-size" min="1" max="12" step="1" value="3" orient="vertical">
+            <button id="btn-camo-fill" class="tool-btn" title="Tô toàn thân">🪣</button>
+            <button id="btn-camo-clear" class="tool-btn" title="Xóa ngụy trang">🧽</button>
+          </div>
+        </div>
+        <p class="hint"><kbd>E</kbd> hút màu • <kbd>Q</kbd>/chuột phải: hút nhanh • <kbd>B</kbd>/<kbd>P</kbd>: cọ/bút • <kbd>G</kbd>: menu kỹ năng • <kbd>F</kbd>: hỏa mù • <kbd>X</kbd>: chạy x4 • <kbd>M</kbd>: drone toàn cảnh • <kbd>1</kbd>-<kbd>8</kbd>: tư thế • <kbd>V</kbd>: góc nhìn • <kbd>C</kbd>: ẩn/hiện bảng • giữ <kbd>W</kbd> sát cây: trèo</p>
+      </div>
+      <div id="score-display"></div>
+    </div>
+    <div id="game-messages"></div>
+  </div>
+
+  <!-- Round/Game end -->
+  <div id="result-overlay" class="hidden">
+    <div class="result-panel">
+      <h2 id="result-title"></h2>
+      <p id="result-detail"></p>
+      <div id="result-scores"></div>
+      <button id="btn-result-continue" class="btn primary hidden">Tiếp Tục</button>
+      <button id="btn-result-menu" class="btn">Về Menu</button>
+    </div>
+  </div>
+
+  <canvas id="game-canvas"></canvas>
+
+  <script src="server-config.js"></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
