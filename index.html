@@ -23,10 +23,12 @@
         <input type="text" id="player-name" placeholder="Tên của bạn" maxlength="16" autocomplete="off">
       </div>
       <div class="menu-buttons">
+        <button id="btn-solo-10" class="btn accent">1 đấu 10 Bot (AWP + AK47)</button>
+        <button id="btn-bot-game" class="btn">Chơi với Bot 5v5</button>
         <button id="btn-create-room" class="btn primary">Tạo Phòng Online</button>
         <button id="btn-join-room" class="btn">Vào Phòng</button>
-        <button id="btn-bot-game" class="btn accent">Chơi với Bot 5v5</button>
       </div>
+      <p class="kb-hint">PC: WASD · Space Nhảy · Shift Chạy · LMB Bắn · RMB/G Ngắm · R Nạp · Q Nhặt · V Đổi súng · C Nằm</p>
       <p id="conn-status" class="conn-status"></p>
     </div>
   </div>
@@ -97,31 +99,47 @@
     <div id="crosshair"><span></span></div>
 
     <div id="hud-weapon">
+      <div id="weapon-slots"><span id="slot-0">—</span> <span id="slot-sep">|</span> <span id="slot-1">—</span></div>
       <div id="weapon-name">—</div>
       <div id="ammo-display"><span id="ammo-clip">0</span> / <span id="ammo-reserve">0</span></div>
       <div id="hp-bar"><div id="hp-fill"></div><span id="hp-text">100</span></div>
     </div>
 
+    <div id="scope-overlay" class="hidden">
+      <div class="scope-hline"></div>
+      <div class="scope-vline"></div>
+      <div class="scope-ring"></div>
+    </div>
+
     <div id="kill-feed"></div>
     <div id="game-messages"></div>
+    <div id="click-hint" class="hidden">Click để khóa chuột (CS mode)<br><small>ESC để thoát</small></div>
+    <div id="kb-bar">WASD · Space Nhảy · Shift Chạy · LMB Bắn · RMB/G Ngắm · R Nạp · Q Nhặt · <b>V Đổi súng</b> · C Nằm</div>
 
-    <!-- Mobile / touch controls -->
+    <!-- Touch controls — layout giống LEGO City Shooter -->
     <div id="touch-controls">
+      <div id="look-zone"></div>
+
       <div id="joystick-zone">
-        <div id="joystick-base">
+        <div id="joystick-visual">
+          <div id="joystick-base"></div>
           <div id="joystick-knob"></div>
         </div>
+        <button class="sm-btn" id="btn-fire-mini" type="button">🔴</button>
       </div>
-      <div id="action-buttons">
-        <button class="act-btn" id="btn-jump" data-act="jump">Nhảy</button>
-        <button class="act-btn" id="btn-prone" data-act="prone">Nằm</button>
-        <button class="act-btn" id="btn-ads" data-act="ads">Ngắm</button>
-        <button class="act-btn" id="btn-reload" data-act="reload">Nạp</button>
-        <button class="act-btn" id="btn-pickup" data-act="pickup">Nhặt</button>
-        <button class="act-btn fire" id="btn-fire" data-act="fire">Bắn</button>
+
+      <div id="hunter-btns">
+        <button class="sm-btn arc-btn" id="btn-pickup" type="button" style="left:145px;top:138px;"><span class="ic">🤚</span><span class="lb">NHẶT</span></button>
+        <button class="sm-btn arc-btn" id="btn-ads" type="button" style="left:203px;top:78px;"><span class="ic">🔭</span><span class="lb">ZOOM</span></button>
+        <button class="sm-btn arc-btn" id="btn-switch" type="button" style="left:118px;top:78px;"><span class="ic">🔄</span><span class="lb">ĐỔI</span></button>
+        <button class="big-btn arc-btn" id="btn-reload" type="button" style="left:225px;top:34px;"><span class="ic">🔃</span><span class="lb">NẠP</span></button>
+        <button class="sm-btn arc-btn" id="btn-sprint" type="button" style="left:80px;top:108px;"><span class="ic">💨</span><span class="lb">CHẠY</span></button>
+        <button class="sm-btn arc-btn" id="btn-jump" type="button" style="left:55px;top:150px;"><span class="ic">↑</span><span class="lb">NHẢY</span></button>
+        <button class="sm-btn arc-btn" id="btn-prone" type="button" style="left:100px;top:175px;"><span class="ic">⬇</span><span class="lb">NẰM</span></button>
+        <button class="fire-btn arc-btn" id="btn-fire" type="button"><span class="ic">🔫</span><span class="lb">BẮN</span></button>
       </div>
-      <button id="btn-drone-cam" class="drone-btn" title="Camera toàn cảnh">Drone</button>
-      <div id="look-zone"></div>
+
+      <button id="btn-drone-cam" class="drone-btn" type="button" title="Camera toàn cảnh">Drone</button>
     </div>
   </div>
 

@@ -119,6 +119,21 @@ function updateHudFromPlayer(p, snap) {
   $('hp-text').textContent = Math.max(0, Math.round(p.hp));
   $('hp-fill').style.width = `${Math.max(0, p.hp)}%`;
   $('crosshair').classList.toggle('ads', !!p.ads);
+  $('scope-overlay')?.classList.toggle('hidden', !p.ads);
+
+  // Dual weapon slots
+  const slots = p.loadout?.slots || [];
+  const active = p.loadout?.active ?? 0;
+  const s0 = $('slot-0');
+  const s1 = $('slot-1');
+  if (s0) {
+    s0.textContent = slots[0] ? (WEAPONS[slots[0].id]?.name || slots[0].id) : '—';
+    s0.classList.toggle('on', active === 0 && !!slots[0]);
+  }
+  if (s1) {
+    s1.textContent = slots[1] ? (WEAPONS[slots[1].id]?.name || slots[1].id) : '—';
+    s1.classList.toggle('on', active === 1 && !!slots[1]);
+  }
 }
 
 // ——— Three.js setup ———
@@ -253,6 +268,8 @@ function startPlaying(snap) {
   state.droneMode = false;
   state.playing = true;
   state.controls.enabled = true;
+  state.controls.scopeLevel = 0;
+  state.controls.ads = false;
   $('drone-banner').classList.add('hidden');
   syncPlayers(snap.players);
   syncCrates(snap.crates);
@@ -262,6 +279,8 @@ function startPlaying(snap) {
       ...me,
       x: me.x, y: me.y, z: me.z,
       yaw: me.yaw, pitch: me.pitch || 0,
+      loadout: me.loadout,
+      weapon: me.weapon,
     };
   }
   // Countdown
@@ -273,7 +292,11 @@ function startPlaying(snap) {
     if (n <= 0) {
       clearInterval(iv);
       $('countdown-overlay').classList.add('hidden');
-      msg(localPlayer?.team === 'CT' ? 'BẢO VỆ — Tiêu diệt Terrorist!' : 'TẤN CÔNG — Tiêu diệt CT!', 3000);
+      if (snap.soloMode) {
+        msg('1 vs 10 — Bạn có AWP + AK47 · nhấn V để đổi súng!', 4000);
+      } else {
+        msg(localPlayer?.team === 'CT' ? 'BẢO VỆ — Tiêu diệt Terrorist!' : 'TẤN CÔNG — Tiêu diệt CT!', 3000);
+      }
     } else {
       $('countdown-num').textContent = n;
     }
@@ -327,6 +350,7 @@ function connectSocket() {
             localPlayer.hp = p.hp;
             localPlayer.alive = p.alive;
             if (p.weapon) localPlayer.weapon = p.weapon;
+            if (p.loadout) localPlayer.loadout = p.loadout;
             localPlayer.kills = p.kills;
             localPlayer.deaths = p.deaths;
           }
@@ -357,14 +381,26 @@ function connectSocket() {
 
     socket.on('crate:picked', (r) => {
       if (r.playerId === myId && localPlayer) {
-        localPlayer.weapon = {
-          id: r.weaponId,
-          clip: WEAPONS[r.weaponId].clipSize,
-          reserve: WEAPONS[r.weaponId].reserve,
-          lastShot: 0,
-          reloading: false,
-        };
+        if (r.loadout) localPlayer.loadout = r.loadout;
+        localPlayer.weapon = localPlayer.loadout?.slots?.[localPlayer.loadout.active]
+          || {
+            id: r.weaponId,
+            clip: WEAPONS[r.weaponId].clipSize,
+            reserve: WEAPONS[r.weaponId].reserve,
+            lastShot: 0,
+            reloading: false,
+          };
         msg(`Nhặt được ${WEAPONS[r.weaponId].name}!`, 2000);
+        updateHudFromPlayer(localPlayer, room);
+      }
+    });
+
+    socket.on('weapon:switch', (r) => {
+      if (r.playerId === myId && localPlayer) {
+        if (localPlayer.loadout) localPlayer.loadout.active = r.active;
+        localPlayer.weapon = localPlayer.loadout?.slots?.[r.active] || localPlayer.weapon;
+        if (localPlayer.weapon) localPlayer.weapon.id = r.weaponId;
+        msg(`Đổi sang ${WEAPONS[r.weaponId]?.name || r.weaponId}`, 1200);
         updateHudFromPlayer(localPlayer, room);
       }
     });
@@ -461,8 +497,12 @@ function updateLocal(dt) {
   localPlayer.pitch = Math.max(-1.3, Math.min(1.3, localPlayer.pitch));
   localPlayer.prone = ctrl.prone;
   localPlayer.ads = ctrl.ads;
+  localPlayer.sprinting = ctrl.sprinting;
 
-  const speed = localPlayer.prone ? 2.2 : localPlayer.ads ? 3.5 : 6.5;
+  let speed = 6.5;
+  if (localPlayer.prone) speed = 2.2;
+  else if (localPlayer.ads) speed = 3.5;
+  else if (localPlayer.sprinting) speed = 9.5;
   const forward = new THREE.Vector3(Math.sin(localPlayer.yaw), 0, Math.cos(localPlayer.yaw));
   const right = new THREE.Vector3(Math.sin(localPlayer.yaw + Math.PI / 2), 0, Math.cos(localPlayer.yaw + Math.PI / 2));
   const mx = ctrl.move.x;
@@ -513,7 +553,7 @@ function updateLocal(dt) {
     localPlayer.z + Math.cos(localPlayer.yaw) * Math.cos(localPlayer.pitch)
   );
   state.camera.lookAt(lookAt);
-  state.camera.fov = localPlayer.ads ? 45 : 75;
+  state.camera.fov = ctrl.fovForScope(75);
   state.camera.updateProjectionMatrix();
 
   // First-person weapon viewmodel
@@ -524,6 +564,16 @@ function updateLocal(dt) {
     socket.emit('player:reload');
   }
   if (ctrl.consumePress('pickup')) tryPickup();
+  if (ctrl.consumePress('switchWeapon')) {
+    socket.emit('player:switchWeapon');
+    // Optimistic local switch
+    if (localPlayer.loadout?.slots?.length > 1) {
+      if (localPlayer.weapon) localPlayer.loadout.slots[localPlayer.loadout.active] = localPlayer.weapon;
+      localPlayer.loadout.active = (localPlayer.loadout.active + 1) % localPlayer.loadout.slots.length;
+      localPlayer.weapon = localPlayer.loadout.slots[localPlayer.loadout.active];
+      msg(`Đổi sang ${WEAPONS[localPlayer.weapon.id]?.name}`, 1000);
+    }
+  }
   if (ctrl.consumePress('drone')) toggleDronePeek();
 
   // Fire
@@ -539,6 +589,7 @@ function updateLocal(dt) {
     pitch: localPlayer.pitch,
     prone: localPlayer.prone,
     ads: localPlayer.ads,
+    sprinting: localPlayer.sprinting,
   });
 
   updateHudFromPlayer(localPlayer, room);
@@ -723,7 +774,7 @@ function bindUI() {
     $('conn-status').textContent = 'Đang kết nối server...';
     try {
       await ensureConnected();
-      socket.emit('room:bot', { name: playerName() }, (res) => {
+      socket.emit('room:bot', { name: playerName(), mode: '5v5' }, (res) => {
         btn.disabled = false;
         if (!res?.ok) {
           $('conn-status').textContent = res?.error || 'Lỗi tạo phòng bot';
@@ -732,7 +783,7 @@ function bindUI() {
         myId = socket.id;
         room = res.room;
         updateLobbyUI(res.room);
-        $('conn-status').textContent = 'Đã vào phòng bot — chờ drone...';
+        $('conn-status').textContent = 'Đã vào phòng bot 5v5 — chờ drone...';
         msg('Đang vào trận với bot...', 2000);
       });
     } catch (err) {
@@ -740,6 +791,31 @@ function bindUI() {
       console.error(err);
       $('conn-status').textContent = 'Không kết nối được. Chạy: npm start rồi mở http://localhost:3000';
       alert('Không kết nối được server.\n\n1) Mở terminal trong thư mục game\n2) Chạy: npm install && npm start\n3) Mở trình duyệt: http://localhost:3000\n\n(Không mở file index.html trực tiếp)');
+    }
+  };
+
+  $('btn-solo-10').onclick = async () => {
+    const btn = $('btn-solo-10');
+    btn.disabled = true;
+    $('conn-status').textContent = 'Đang tạo 1 vs 10...';
+    try {
+      await ensureConnected();
+      socket.emit('room:bot', { name: playerName(), mode: 'solo10' }, (res) => {
+        btn.disabled = false;
+        if (!res?.ok) {
+          $('conn-status').textContent = res?.error || 'Lỗi';
+          return alert(res?.error || 'Lỗi');
+        }
+        myId = socket.id;
+        room = res.room;
+        $('conn-status').textContent = '1 vs 10 — AWP + AK47 sẵn sàng · V đổi súng';
+        msg('1 đấu 10 bot — trang bị AWP & AK47', 2500);
+      });
+    } catch (err) {
+      btn.disabled = false;
+      console.error(err);
+      $('conn-status').textContent = 'Không kết nối được server';
+      alert('Không kết nối được server. Chạy npm start rồi mở http://localhost:3000');
     }
   };
 

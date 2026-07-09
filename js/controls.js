@@ -1,4 +1,9 @@
-/** Touch joystick + action buttons + keyboard/mouse for web & mobile */
+/**
+ * Controls matching LEGO City Shooter reference:
+ * WASD move · Space jump · Shift/B sprint · R reload · Q pickup
+ * V switch weapon · G / RMB zoom(ADS) · LMB shoot · C prone
+ * Mobile: left joystick + mini-shoot, right arc buttons
+ */
 
 export class Controls {
   constructor() {
@@ -12,16 +17,19 @@ export class Controls {
     this.reloadPressed = false;
     this.pickup = false;
     this.pickupPressed = false;
+    this.switchWeaponPressed = false;
     this.ads = false;
+    this.scopeLevel = 0; // 0 off, 1 mid, 2 max (like reference)
     this.prone = false;
+    this.sprinting = false;
     this.drone = false;
     this.dronePressed = false;
     this.pointerLocked = false;
     this.enabled = false;
 
     this._keys = new Set();
-    this._joyTouch = null;
-    this._lookTouch = null;
+    this._joyPointer = null;
+    this._lookPointer = null;
     this._lastLook = null;
     this._fireHeld = false;
 
@@ -31,41 +39,67 @@ export class Controls {
   _bind() {
     window.addEventListener('keydown', (e) => {
       if (!this.enabled) return;
+      if (e.target?.tagName === 'INPUT') return;
       const k = e.code;
       this._keys.add(k);
+
       if (k === 'Space') { this.jumpPressed = true; e.preventDefault(); }
       if (k === 'KeyR') this.reloadPressed = true;
-      if (k === 'KeyF' || k === 'KeyE') this.pickupPressed = true;
+      if (k === 'KeyQ') this.pickupPressed = true;
+      if (k === 'KeyV') this.switchWeaponPressed = true;
       if (k === 'KeyC') this.prone = !this.prone;
       if (k === 'KeyM') this.dronePressed = true;
-      if (k === 'KeyV') this.ads = !this.ads;
+      if (k === 'KeyG') this._cycleScope();
+      if (k === 'ShiftLeft' || k === 'ShiftRight' || k === 'KeyB') this.sprinting = true;
     });
+
     window.addEventListener('keyup', (e) => {
       this._keys.delete(e.code);
-      if (e.code === 'Mouse0' || e.code === 'KeyV') { /* noop */ }
+      if (e.code === 'ShiftLeft' || e.code === 'ShiftRight' || e.code === 'KeyB') {
+        this.sprinting = false;
+      }
     });
 
     const canvas = document.getElementById('game-canvas');
-    canvas.addEventListener('click', () => {
+    const lookZone = document.getElementById('look-zone');
+
+    const tryLock = () => {
       if (!this.enabled) return;
-      if (!this._isTouchDevice()) canvas.requestPointerLock?.();
-    });
+      if (!this._isTouchDevice()) canvas?.requestPointerLock?.();
+    };
+    canvas?.addEventListener('click', tryLock);
+    lookZone?.addEventListener('click', tryLock);
+
     document.addEventListener('pointerlockchange', () => {
       this.pointerLocked = document.pointerLockElement === canvas;
+      const hint = document.getElementById('click-hint');
+      if (hint) {
+        hint.classList.toggle('hidden', !this.enabled || this.pointerLocked || this._isTouchDevice());
+      }
     });
+
     document.addEventListener('mousemove', (e) => {
       if (!this.enabled || !this.pointerLocked) return;
       this.lookDelta.x += e.movementX;
       this.lookDelta.y += e.movementY;
     });
+
+    // Reference: LMB = shoot, RMB = zoom cycle
     document.addEventListener('mousedown', (e) => {
       if (!this.enabled || !this.pointerLocked) return;
-      if (e.button === 0) { this.fire = true; this.firePressed = true; this._fireHeld = true; }
-      if (e.button === 2) this.ads = true;
+      if (e.button === 0) {
+        this.fire = true;
+        this.firePressed = true;
+        this._fireHeld = true;
+      } else if (e.button === 2) {
+        this._cycleScope();
+      }
     });
     document.addEventListener('mouseup', (e) => {
-      if (e.button === 0) { this.fire = false; this._fireHeld = false; }
-      if (e.button === 2) this.ads = false;
+      if (e.button === 0) {
+        this.fire = false;
+        this._fireHeld = false;
+      }
     });
     document.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -74,154 +108,181 @@ export class Controls {
     this._setupLookZone();
   }
 
+  _cycleScope() {
+    this.scopeLevel = (this.scopeLevel + 1) % 3;
+    this.ads = this.scopeLevel > 0;
+  }
+
   _isTouchDevice() {
     return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
   }
 
   _setupJoystick() {
+    const zone = document.getElementById('joystick-zone');
     const base = document.getElementById('joystick-base');
     const knob = document.getElementById('joystick-knob');
-    const zone = document.getElementById('joystick-zone');
-    if (!base || !zone) return;
+    if (!zone || !base || !knob) return;
 
-    const maxR = 40;
-    const onStart = (e) => {
+    const maxR = 44;
+    const grabR = 95;
+
+    const center = () => {
+      const r = base.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    };
+
+    const move = (cx, cy) => {
+      const c = center();
+      let dx = cx - c.x;
+      let dy = cy - c.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const cl = Math.min(len, maxR);
+      const nx = dx / len;
+      const ny = dy / len;
+      this.move.x = nx * (cl / maxR);
+      this.move.y = -ny * (cl / maxR);
+      knob.style.transform = `translate(calc(-50% + ${nx * cl}px), calc(-50% + ${ny * cl}px))`;
+    };
+
+    const reset = () => {
+      this.move.x = 0;
+      this.move.y = 0;
+      knob.style.transform = 'translate(-50%, -50%)';
+      this._joyPointer = null;
+    };
+
+    zone.addEventListener('pointerdown', (e) => {
       if (!this.enabled) return;
-      const t = e.changedTouches ? e.changedTouches[0] : e;
-      this._joyTouch = t.identifier ?? 'mouse';
-      this._updateJoy(t, base, knob, maxR);
+      const c = center();
+      const dist = Math.hypot(e.clientX - c.x, e.clientY - c.y);
+      if (dist > grabR && e.pointerType !== 'mouse') {
+        // Far from stick → look drag
+        this._lookPointer = e.pointerId;
+        this._lastLook = { x: e.clientX, y: e.clientY };
+        return;
+      }
+      this._joyPointer = e.pointerId;
+      try { zone.setPointerCapture(e.pointerId); } catch (_) {}
+      move(e.clientX, e.clientY);
       e.preventDefault();
-    };
-    const onMove = (e) => {
-      if (this._joyTouch === null) return;
-      const touches = e.changedTouches || [e];
-      for (const t of touches) {
-        if ((t.identifier ?? 'mouse') === this._joyTouch) {
-          this._updateJoy(t, base, knob, maxR);
-          e.preventDefault();
-        }
-      }
-    };
-    const onEnd = (e) => {
-      const touches = e.changedTouches || [e];
-      for (const t of touches) {
-        if ((t.identifier ?? 'mouse') === this._joyTouch) {
-          this._joyTouch = null;
-          this.move.x = 0;
-          this.move.y = 0;
-          knob.style.transform = 'translate(0,0)';
-        }
-      }
-    };
+    }, { passive: false });
 
-    zone.addEventListener('touchstart', onStart, { passive: false });
-    zone.addEventListener('touchmove', onMove, { passive: false });
-    zone.addEventListener('touchend', onEnd);
-    zone.addEventListener('touchcancel', onEnd);
-  }
+    zone.addEventListener('pointermove', (e) => {
+      if (this._lookPointer === e.pointerId && this._lastLook) {
+        this.lookDelta.x += (e.clientX - this._lastLook.x) * 1.4;
+        this.lookDelta.y += (e.clientY - this._lastLook.y) * 1.4;
+        this._lastLook = { x: e.clientX, y: e.clientY };
+        e.preventDefault();
+        return;
+      }
+      if (this._joyPointer !== e.pointerId) return;
+      move(e.clientX, e.clientY);
+      e.preventDefault();
+    }, { passive: false });
 
-  _updateJoy(t, base, knob, maxR) {
-    const rect = base.getBoundingClientRect();
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    let dx = t.clientX - cx;
-    let dy = t.clientY - cy;
-    const len = Math.hypot(dx, dy) || 1;
-    if (len > maxR) { dx = (dx / len) * maxR; dy = (dy / len) * maxR; }
-    knob.style.transform = `translate(${dx}px, ${dy}px)`;
-    this.move.x = dx / maxR;
-    this.move.y = -dy / maxR;
+    const end = (e) => {
+      if (this._lookPointer === e.pointerId) {
+        this._lookPointer = null;
+        this._lastLook = null;
+        return;
+      }
+      if (this._joyPointer === e.pointerId) reset();
+    };
+    zone.addEventListener('pointerup', end);
+    zone.addEventListener('pointercancel', end);
   }
 
   _setupLookZone() {
     const zone = document.getElementById('look-zone');
     if (!zone) return;
-    zone.addEventListener('touchstart', (e) => {
+
+    zone.addEventListener('pointerdown', (e) => {
       if (!this.enabled) return;
-      const t = e.changedTouches[0];
-      this._lookTouch = t.identifier;
-      this._lastLook = { x: t.clientX, y: t.clientY };
-    }, { passive: true });
-    zone.addEventListener('touchmove', (e) => {
-      for (const t of e.changedTouches) {
-        if (t.identifier === this._lookTouch && this._lastLook) {
-          this.lookDelta.x += (t.clientX - this._lastLook.x) * 1.4;
-          this.lookDelta.y += (t.clientY - this._lastLook.y) * 1.4;
-          this._lastLook = { x: t.clientX, y: t.clientY };
-          e.preventDefault();
-        }
-      }
-    }, { passive: false });
-    zone.addEventListener('touchend', (e) => {
-      for (const t of e.changedTouches) {
-        if (t.identifier === this._lookTouch) {
-          this._lookTouch = null;
-          this._lastLook = null;
-        }
-      }
+      if (e.pointerType === 'mouse') return; // mouse uses pointer lock
+      this._lookPointer = e.pointerId;
+      this._lastLook = { x: e.clientX, y: e.clientY };
+      try { zone.setPointerCapture(e.pointerId); } catch (_) {}
     });
+    zone.addEventListener('pointermove', (e) => {
+      if (e.pointerId !== this._lookPointer || !this._lastLook) return;
+      this.lookDelta.x += (e.clientX - this._lastLook.x) * 1.4;
+      this.lookDelta.y += (e.clientY - this._lastLook.y) * 1.4;
+      this._lastLook = { x: e.clientX, y: e.clientY };
+      e.preventDefault();
+    }, { passive: false });
+    const end = (e) => {
+      if (e.pointerId === this._lookPointer) {
+        this._lookPointer = null;
+        this._lastLook = null;
+      }
+    };
+    zone.addEventListener('pointerup', end);
+    zone.addEventListener('pointercancel', end);
   }
 
-  _setupActions() {
-    const map = {
-      'btn-fire': 'fire',
-      'btn-jump': 'jump',
-      'btn-prone': 'prone',
-      'btn-ads': 'ads',
-      'btn-reload': 'reload',
-      'btn-pickup': 'pickup',
-      'btn-drone-cam': 'drone',
-    };
-    for (const [id, act] of Object.entries(map)) {
+  _setupButtons() {
+    const bind = (id, onDown, onUp = null) => {
       const el = document.getElementById(id);
-      if (!el) continue;
-      const start = (e) => {
+      if (!el) return;
+      el.style.touchAction = 'none';
+      let activeId = null;
+      el.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (!this.enabled && act !== 'drone') return;
+        if (!this.enabled && id !== 'btn-drone-cam') return;
+        activeId = e.pointerId;
         el.classList.add('active');
-        if (act === 'fire') { this.fire = true; this.firePressed = true; this._fireHeld = true; }
-        if (act === 'jump') this.jumpPressed = true;
-        if (act === 'reload') this.reloadPressed = true;
-        if (act === 'pickup') this.pickupPressed = true;
-        if (act === 'drone') this.dronePressed = true;
-        if (act === 'prone') this.prone = !this.prone;
-        if (act === 'ads') this.ads = !this.ads;
-      };
-      const end = (e) => {
-        e.preventDefault();
-        el.classList.remove('active');
-        if (act === 'fire') { this.fire = false; this._fireHeld = false; }
-      };
-      el.addEventListener('touchstart', start, { passive: false });
-      el.addEventListener('touchend', end, { passive: false });
-      el.addEventListener('mousedown', start);
-      el.addEventListener('mouseup', end);
-      el.addEventListener('mouseleave', end);
-    }
+        try { el.setPointerCapture(e.pointerId); } catch (_) {}
+        onDown();
+      }, { passive: false });
+      if (onUp) {
+        const release = (e) => {
+          if (activeId !== null && e.pointerId !== activeId) return;
+          activeId = null;
+          el.classList.remove('active');
+          onUp();
+        };
+        el.addEventListener('pointerup', release);
+        el.addEventListener('pointercancel', release);
+      } else {
+        el.addEventListener('pointerup', () => el.classList.remove('active'));
+        el.addEventListener('pointercancel', () => el.classList.remove('active'));
+      }
+    };
+
+    bind('btn-fire', () => { this.fire = true; this.firePressed = true; this._fireHeld = true; }, () => { this.fire = false; this._fireHeld = false; });
+    bind('btn-fire-mini', () => { this.firePressed = true; this._fireHeld = true; this.fire = true; }, () => { this.fire = false; this._fireHeld = false; });
+    bind('btn-jump', () => { this.jumpPressed = true; });
+    bind('btn-reload', () => { this.reloadPressed = true; });
+    bind('btn-pickup', () => { this.pickupPressed = true; });
+    bind('btn-switch', () => { this.switchWeaponPressed = true; });
+    bind('btn-ads', () => { this._cycleScope(); });
+    bind('btn-prone', () => { this.prone = !this.prone; });
+    bind('btn-sprint', () => { this.sprinting = true; }, () => { this.sprinting = false; });
+    bind('btn-drone-cam', () => { this.dronePressed = true; });
   }
 
   update() {
-    // Keyboard movement merges with joystick
     let kx = 0, ky = 0;
     if (this._keys.has('KeyW') || this._keys.has('ArrowUp')) ky += 1;
     if (this._keys.has('KeyS') || this._keys.has('ArrowDown')) ky -= 1;
     if (this._keys.has('KeyA') || this._keys.has('ArrowLeft')) kx -= 1;
     if (this._keys.has('KeyD') || this._keys.has('ArrowRight')) kx += 1;
-    if (this._keys.has('ControlLeft') || this._keys.has('KeyC')) { /* prone via toggle */ }
-    if (this._keys.has('KeyV') || this._keys.has('Mouse2')) this.ads = this._keys.has('KeyV') ? this.ads : this.ads;
 
     if (kx || ky) {
       const len = Math.hypot(kx, ky) || 1;
       this.move.x = kx / len;
       this.move.y = ky / len;
-    } else if (this._joyTouch === null) {
+    } else if (this._joyPointer === null) {
       this.move.x = 0;
       this.move.y = 0;
     }
 
     this.jump = this._keys.has('Space') || this.jumpPressed;
     this.fire = this._fireHeld;
+    if (this._keys.has('ShiftLeft') || this._keys.has('ShiftRight') || this._keys.has('KeyB')) {
+      this.sprinting = true;
+    }
   }
 
   consumeLook() {
@@ -238,5 +299,11 @@ export class Controls {
       return true;
     }
     return false;
+  }
+
+  fovForScope(base = 75) {
+    if (this.scopeLevel === 1) return base / 1.5;
+    if (this.scopeLevel === 2) return base / 3;
+    return base;
   }
 }

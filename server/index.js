@@ -210,19 +210,24 @@ io.on('connection', (socket) => {
     io.to(room.code).emit('chat', { system: true, text: `${p.name} đã vào phòng` });
   });
 
-  socket.on('room:bot', ({ name }, cb) => {
+  socket.on('room:bot', ({ name, mode }, cb) => {
     let code = createRoomCode();
     while (rooms.has(code)) code = createRoomCode();
     const room = new GameRoom(code, socket.id);
-    room.botMode = true;
-    room.addPlayer(socket.id, name);
-    room.fillBots();
+
+    if (mode === 'solo10') {
+      room.setupSolo1v10(socket.id, name);
+    } else {
+      room.botMode = true;
+      room.addPlayer(socket.id, name);
+      room.fillBots(10);
+      const me = room.players.get(socket.id);
+      if (me) me.ready = true;
+    }
+
     rooms.set(code, room);
     socket.join(code);
     socket.data.roomCode = code;
-    // Auto ready & start
-    const me = room.players.get(socket.id);
-    if (me) me.ready = true;
     cb?.({ ok: true, room: room.snapshot() });
     broadcastRoom(room);
     setTimeout(() => {
@@ -319,6 +324,13 @@ io.on('connection', (socket) => {
     if (!room) return;
     const r = room.reload(socket.id);
     if (r) io.to(room.code).emit('reload', r);
+  });
+
+  socket.on('player:switchWeapon', () => {
+    const room = getRoom(socket.data.roomCode);
+    if (!room) return;
+    const r = room.switchWeapon(socket.id);
+    if (r) io.to(room.code).emit('weapon:switch', r);
   });
 
   socket.on('player:pickup', ({ crateId }) => {
