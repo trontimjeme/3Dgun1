@@ -1158,11 +1158,20 @@ function bindUI() {
     state.droneMode = false;
   };
 
-  // Tap/click anywhere during leftover drone intro to enter as YOU
+  // Tap canvas during match — recover FPS if stuck in spectator height
   canvas.addEventListener('pointerdown', () => {
     if (!state.playing && state.droneMode) {
       socket?.emit('round:skipDrone');
       state.droneMode = false;
+      return;
+    }
+    if (state.playing || room?.state === 'playing') {
+      state.screen = 'playing';
+      ensureLocalPlayer();
+      applyFpsCamera();
+      if (isStuckSpectatorView()) {
+        msg('Đã khóa góc nhìn nhân vật', 1500);
+      }
     }
   });
 
