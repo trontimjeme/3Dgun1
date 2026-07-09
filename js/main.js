@@ -364,7 +364,28 @@ function startDroneView(snap) {
   msg('Sắp nhập vai CT (mũi tên vàng) — góc nhìn ngôi thứ nhất như CS:GO', 4000);
 }
 
+function findMe(players) {
+  if (!players?.length) return null;
+  // Prefer exact socket id
+  let me = players.find((p) => p.id === myId);
+  if (me) return me;
+  // Fallback: only human (not bot)
+  me = players.find((p) => !p.isBot);
+  if (me) {
+    myId = me.id; // re-bind so later sync works
+    return me;
+  }
+  return players[0];
+}
+
 function startPlaying(snap) {
+  if (state.playing && localPlayer && !state.droneMode) {
+    // Already in FPS — refresh snapshot only
+    room = snap;
+    return;
+  }
+  if (!ensureThree()) return;
+
   state.droneMode = false;
   state.playing = true;
   state.thirdPerson = false;
@@ -372,31 +393,53 @@ function startPlaying(snap) {
   state.controls.scopeLevel = 0;
   state.controls.ads = false;
   state.combatReady = false;
-  $('drone-banner').classList.add('hidden');
+
+  document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
+  $('drone-banner')?.classList.add('hidden');
   setHud(true);
   $('crosshair')?.classList.remove('hidden');
+
+  room = snap;
   syncPlayers(snap.players);
-  syncCrates(snap.crates);
-  const me = snap.players.find((p) => p.id === myId);
-  if (me) {
-    localPlayer = {
-      ...me,
-      x: me.x, y: me.y, z: me.z,
-      yaw: me.yaw, pitch: me.pitch || 0,
-      loadout: me.loadout,
-      weapon: me.weapon,
-    };
+  syncCrates(snap.crates || []);
+
+  const me = findMe(snap.players);
+  if (!me) {
+    console.error('No local player in snapshot', { myId, players: snap.players });
+    msg('Lỗi: không tìm thấy nhân vật của bạn', 5000);
+    return;
   }
+  myId = me.id;
+  localPlayer = {
+    ...me,
+    x: me.x, y: me.y || 0, z: me.z,
+    yaw: me.yaw || 0, pitch: me.pitch || 0,
+    loadout: me.loadout,
+    weapon: me.weapon,
+  };
+
   // FPS: hide own body — you ARE this character
   const myChar = state.characters.get(myId);
   if (myChar) {
     myChar.visible = false;
     if (myChar.userData.youMarker) myChar.userData.youMarker.visible = false;
   }
+
+  // Place camera at eyes IMMEDIATELY (don't wait for first frame)
+  const eye = 1.65;
+  state.eyeHeight = eye;
+  state.camera.position.set(localPlayer.x, localPlayer.y + eye, localPlayer.z);
+  state.camera.lookAt(
+    localPlayer.x + Math.sin(localPlayer.yaw),
+    localPlayer.y + eye,
+    localPlayer.z + Math.cos(localPlayer.yaw)
+  );
+  state.camera.fov = 75;
+  state.camera.updateProjectionMatrix();
+
   if (state.viewmodel) state.viewmodel.visible = true;
   updateViewmodel(localPlayer);
 
-  // Request pointer lock immediately (CS:GO mouse look)
   try {
     if (!('ontouchstart' in window)) {
       document.getElementById('game-canvas')?.requestPointerLock?.();
@@ -412,12 +455,9 @@ function startPlaying(snap) {
       clearInterval(iv);
       $('countdown-overlay').classList.add('hidden');
       state.combatReady = true;
-      if (snap.soloMode) {
-        msg('BẠN ĐANG ĐIỀU KHIỂN NHÂN VẬT — WASD + chuột · V đổi súng', 4000);
-      } else {
-        msg(localPlayer?.team === 'CT' ? 'BẢO VỆ — Tiêu diệt Terrorist!' : 'TẤN CÔNG — Tiêu diệt CT!', 3000);
-      }
-      // Re-request lock after countdown
+      msg(snap.soloMode
+        ? 'BẠN ĐANG ĐIỀU KHIỂN — WASD di chuyển · chuột nhìn · LMB bắn · V đổi súng'
+        : (localPlayer.team === 'CT' ? 'BẢO VỆ!' : 'TẤN CÔNG!'), 4000);
       try {
         if (!('ontouchstart' in window)) {
           document.getElementById('game-canvas')?.requestPointerLock?.();
@@ -428,6 +468,7 @@ function startPlaying(snap) {
     }
   }, 700);
   updateHudFromPlayer(localPlayer, snap);
+  console.log('FPS start', { myId, pos: [localPlayer.x, localPlayer.y, localPlayer.z], weapon: localPlayer.weapon?.id });
 }
 
 // ——— Networking ———
@@ -436,12 +477,14 @@ function wireSocketEvents(sock) {
   sock.on('chat', addChat);
 
   sock.on('round:drone', (snap) => {
+    // Drone disabled — treat as immediate FPS start
     document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
     room = snap;
-    startDroneView(snap);
+    startPlaying(snap);
   });
 
   sock.on('round:start', (snap) => {
+    document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
     room = snap;
     startPlaying(snap);
   });
@@ -985,9 +1028,10 @@ function bindUI() {
     if (!ensureThree()) return;
     const btn = $('btn-solo-10');
     btn.disabled = true;
-    $('conn-status').textContent = 'Đang tạo 1 vs 10...';
+    $('conn-status').textContent = 'Đang vào trận FPS...';
     try {
       await ensureConnected();
+      myId = socket.id;
       socket.emit('room:bot', { name: playerName(), mode: 'solo10' }, (res) => {
         btn.disabled = false;
         if (!res?.ok) {
@@ -996,8 +1040,42 @@ function bindUI() {
         }
         myId = socket.id;
         room = res.room;
-        $('conn-status').textContent = '1 vs 10 — AWP + AK47 · V đổi súng';
-        msg('1 đấu 10 bot — trang bị AWP & AK47', 2500);
+        $('conn-status').textContent = '1 vs 10 — đang nhập vai...';
+        // Safety: if round:start missed, force FPS after 1s using lobby snapshot
+        setTimeout(() => {
+          if (!state.playing && res.room?.players?.length) {
+            console.warn('Force FPS start from room callback');
+            // Synthesize a playing snapshot (spawns applied on server shortly)
+            socket.emit('round:skipDrone');
+            // Local offline: beginRoundFlow may have already run; if still stuck, start with current room
+            if (!state.playing) {
+              const snap = {
+                ...res.room,
+                state: 'playing',
+                players: res.room.players.map((p) => {
+                  if (p.id === myId || !p.isBot) {
+                    return {
+                      ...p,
+                      x: 0, y: 0, z: 14, yaw: Math.PI,
+                      weapon: p.weapon || { id: 'AWP', clip: 5, reserve: 20, lastShot: 0, reloading: false },
+                      loadout: p.loadout || {
+                        slots: [
+                          { id: 'AWP', clip: 5, reserve: 20, lastShot: 0, reloading: false },
+                          { id: 'AK47', clip: 30, reserve: 90, lastShot: 0, reloading: false },
+                        ],
+                        active: 0,
+                      },
+                    };
+                  }
+                  return p;
+                }),
+                soloMode: true,
+                crates: res.room.crates || [],
+              };
+              startPlaying(snap);
+            }
+          }
+        }, 1200);
       });
     } catch (err) {
       btn.disabled = false;

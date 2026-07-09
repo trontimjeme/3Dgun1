@@ -5,8 +5,6 @@
 import { GameRoom, createRoomCode } from './room.js';
 import { updateBotsMeleeOrGun } from './botAI.js';
 
-const DRONE_MS = 5300; // ~50% faster than 8s
-
 const SPAWNS = {
   CT: [
     { x: -4, z: 24 }, { x: 0, z: 24 }, { x: 4, z: 24 },
@@ -71,15 +69,14 @@ export function createLocalSocket() {
 
   function beginRoundFlow() {
     clearTimers();
+    // Skip drone — vào FPS ngay để nhập vai nhân vật
     room.startRound(SPAWNS, CRATE_SPOTS);
-    emitLocal('round:drone', room.snapshot());
-    startTimer = setTimeout(() => {
-      if (room.beginPlaying()) {
-        room.combatAt = Date.now() + 2100; // sync with client 3-2-1 — both sides enter together
-        emitLocal('round:start', room.snapshot());
-        startTick();
-      }
-    }, DRONE_MS);
+    room.state = 'drone'; // beginPlaying() requires non-playing
+    if (room.beginPlaying()) {
+      room.combatAt = Date.now() + 2100;
+      emitLocal('round:start', room.snapshot());
+      startTick();
+    }
   }
 
   function startTick() {
@@ -143,12 +140,7 @@ export function createLocalSocket() {
     }
 
     if (event === 'round:skipDrone') {
-      if (room.state === 'drone' && room.beginPlaying()) {
-        if (startTimer) clearTimeout(startTimer);
-        room.combatAt = Date.now() + 2100;
-        emitLocal('round:start', room.snapshot());
-        startTick();
-      }
+      // No-op: drone disabled — already in FPS
       return;
     }
 

@@ -19,8 +19,6 @@ app.use(express.static(root));
 app.use('/node_modules', express.static(path.join(root, 'node_modules')));
 
 const rooms = new Map();
-const DRONE_MS = 5300; // ~50% faster than 8s
-
 // Shared spawn / crate data (must match client map)
 const SPAWNS = {
   CT: [
@@ -146,15 +144,13 @@ io.on('connection', (socket) => {
     broadcastRoom(room);
     setTimeout(() => {
       room.startRound(SPAWNS, CRATE_SPOTS);
-      io.to(room.code).emit('round:drone', room.snapshot());
-      setTimeout(() => {
-        if (room.beginPlaying()) {
-          room.combatAt = Date.now() + 2100;
-          io.to(room.code).emit('round:start', room.snapshot());
-          startTick(room);
-        }
-      }, DRONE_MS);
-    }, 500);
+      // Skip drone — vào FPS ngay
+      if (room.beginPlaying()) {
+        room.combatAt = Date.now() + 2100;
+        io.to(room.code).emit('round:start', room.snapshot());
+        startTick(room);
+      }
+    }, 300);
   });
 
   socket.on('room:team', ({ team }) => {
@@ -194,14 +190,11 @@ io.on('connection', (socket) => {
     // Mark all ready
     for (const p of room.players.values()) p.ready = true;
     room.startRound(SPAWNS, CRATE_SPOTS);
-    io.to(room.code).emit('round:drone', room.snapshot());
-    setTimeout(() => {
-      if (room.beginPlaying()) {
-        room.combatAt = Date.now() + 2100;
-        io.to(room.code).emit('round:start', room.snapshot());
-        startTick(room);
-      }
-    }, DRONE_MS);
+    if (room.beginPlaying()) {
+      room.combatAt = Date.now() + 2100;
+      io.to(room.code).emit('round:start', room.snapshot());
+      startTick(room);
+    }
   });
 
   socket.on('chat', ({ text }) => {
@@ -258,13 +251,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('round:skipDrone', () => {
-    const room = getRoom(socket.data.roomCode);
-    if (!room || room.state !== 'drone') return;
-    if (room.beginPlaying()) {
-      room.combatAt = Date.now() + 2100;
-      io.to(room.code).emit('round:start', room.snapshot());
-      startTick(room);
-    }
+    // Drone disabled — already started in FPS
   });
 
   socket.on('disconnect', () => {
