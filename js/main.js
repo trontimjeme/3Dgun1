@@ -30,10 +30,17 @@ const state = {
   clock: new THREE.Clock(),
   velocityY: 0,
   onGround: true,
+  jumpCount: 0,
+  thirdPerson: false,
   eyeHeight: 1.6,
   muzzleFlash: null,
   tracers: [],
 };
+
+const JUMP_VEL_FIRST = 7;
+const JUMP_VEL_DOUBLE = 7 * Math.SQRT2; // nhảy lần 2 cao gấp đôi lần 1
+const FPS_FOV = 78;
+const THIRD_FOV = 96;
 
 // ——— UI helpers ———
 function showScreen(id) {
@@ -272,7 +279,7 @@ function syncPlayers(players) {
     }
     // Local player in FPS: hide body (you look through their eyes)
     if (p.id === myId && state.playing && !state.droneMode) {
-      ch.visible = false;
+      ch.visible = !!state.thirdPerson;
       const mount = ch.userData.weaponMount;
       const wid = p.weapon?.id;
       if (wid && wid !== 'FIST' && mount.userData.wid !== wid) {
@@ -282,6 +289,10 @@ function syncPlayers(players) {
       } else if ((!wid || wid === 'FIST') && mount.children.length) {
         while (mount.children.length) mount.remove(mount.children[0]);
         mount.userData.wid = wid || null;
+      }
+      if (state.thirdPerson) {
+        ch.position.set(localPlayer?.x ?? p.x, localPlayer?.y ?? p.y, localPlayer?.z ?? p.z);
+        ch.rotation.y = localPlayer?.yaw ?? p.yaw;
       }
       continue;
     }
@@ -431,7 +442,6 @@ function applyFpsCamera() {
   const pz = Number.isFinite(p.z) ? p.z : 14;
   const eyeY = py + eye;
 
-  // Free camera (no scene parent) — lookAt sets the view matrix used by renderer
   state.camera.position.set(px, eyeY, pz);
   state.camera.up.set(0, 1, 0);
   state.camera.lookAt(
@@ -441,11 +451,54 @@ function applyFpsCamera() {
   );
   state.camera.updateMatrixWorld(true);
 
-  const fov = state.controls?.fovForScope?.(75) ?? 75;
-  if (Math.abs(state.camera.fov - fov) > 0.01) {
-    state.camera.fov = fov;
+  const scopeFov = state.controls?.fovForScope?.(FPS_FOV) ?? FPS_FOV;
+  if (Math.abs(state.camera.fov - scopeFov) > 0.01) {
+    state.camera.fov = scopeFov;
     state.camera.updateProjectionMatrix();
   }
+}
+
+function applyThirdPersonCamera() {
+  if (!state.camera) return;
+  detachCamera();
+
+  const p = getPlayerForCamera();
+  const yaw = p.yaw ?? Math.PI;
+  const pitch = Math.max(-0.6, Math.min(0.6, p.pitch || 0));
+  const px = Number.isFinite(p.x) ? p.x : 0;
+  const py = p.y || 0;
+  const pz = Number.isFinite(p.z) ? p.z : 14;
+  const dist = 5.8;
+  const camY = py + 2.4 + Math.sin(pitch) * 1.2;
+  const camX = px - Math.sin(yaw) * Math.cos(pitch * 0.5) * dist;
+  const camZ = pz - Math.cos(yaw) * Math.cos(pitch * 0.5) * dist;
+
+  state.camera.position.set(camX, camY, camZ);
+  state.camera.up.set(0, 1, 0);
+  state.camera.lookAt(px, py + 1.35, pz);
+  state.camera.updateMatrixWorld(true);
+
+  if (Math.abs(state.camera.fov - THIRD_FOV) > 0.01) {
+    state.camera.fov = THIRD_FOV;
+    state.camera.updateProjectionMatrix();
+  }
+}
+
+function applyPlayerCamera() {
+  if (state.thirdPerson) applyThirdPersonCamera();
+  else applyFpsCamera();
+}
+
+function toggleThirdPerson() {
+  if (!state.playing || !localPlayer) return;
+  state.thirdPerson = !state.thirdPerson;
+  const ch = state.characters.get(myId);
+  if (ch) ch.visible = state.thirdPerson;
+  if (state.viewmodel) state.viewmodel.visible = !state.thirdPerson;
+  applyPlayerCamera();
+  msg(state.thirdPerson
+    ? 'Góc nhìn 3 người (H) — góc rộng · súng hiển thị · leo tường'
+    : 'Góc nhìn 1 người (H)', 2500);
 }
 
 function getCameraWorldY() {
@@ -473,7 +526,7 @@ function isStuckSpectatorView() {
 function forceRenderFrames(n = 2) {
   if (!state.renderer || !state.scene || !state.camera) return;
   for (let i = 0; i < n; i++) {
-    applyFpsCamera();
+    applyPlayerCamera();
     state.renderer.render(state.scene, state.camera);
   }
 }
@@ -486,7 +539,7 @@ function enterPlayerView(snap) {
   if (state.controls) state.controls.enabled = true;
   showLegoControls();
   ensureLocalPlayer(snap?.players);
-  applyFpsCamera();
+  applyPlayerCamera();
   forceRenderFrames(3);
 }
 
@@ -509,6 +562,7 @@ function returnToMenu() {
   state.sandboxMode = false;
   state.combatReady = false;
   state.droneMode = false;
+  state.thirdPerson = false;
   state.mode = null;
   localPlayer = null;
   if (state.controls) {
@@ -653,6 +707,7 @@ function startPlaying(snap) {
   state.playing = true;
   state.screen = 'playing';
   state.thirdPerson = false;
+  state.jumpCount = 0;
   if (state.controls) {
     state.controls.enabled = true;
     state.controls.scopeLevel = 0;
@@ -676,7 +731,7 @@ function startPlaying(snap) {
     }
   }
 
-  applyFpsCamera();
+  applyPlayerCamera();
   enterPlayerView(snap);
   if (state.viewmodel) state.viewmodel.visible = true;
   updateViewmodel(localPlayer);
@@ -695,7 +750,8 @@ function startPlaying(snap) {
     $('click-hint').innerHTML = 'Giữ chuột trên map để nhìn · LMB bắn · WASD di chuyển<br><small>Hoặc click để khóa chuột (CS mode)</small>';
   } else if (state._countdownIv) clearInterval(state._countdownIv);
   if (!isSandbox) {
-  let n = 3;
+  const soloFast = !!(room?.soloMode);
+  let n = soloFast ? 1 : 3;
   $('countdown-overlay').classList.remove('hidden');
   $('countdown-num').textContent = n;
   state._countdownIv = setInterval(() => {
@@ -706,14 +762,16 @@ function startPlaying(snap) {
       state._countdownIv = null;
       $('countdown-overlay').classList.add('hidden');
       state.combatReady = true;
-      msg('BẠN LÀ NHÂN VẬT — joystick / WASD · nhìn · BẮN', 4000);
+      msg(soloFast
+        ? '1 vs 10 — BẮN! · H = góc nhìn 3 người · nhảy 2 lần · leo tường'
+        : 'BẠN LÀ NHÂN VẬT — joystick / WASD · nhìn · BẮN', 4000);
       if (!isTouch) {
         try { document.getElementById('game-canvas')?.requestPointerLock?.(); } catch (_) {}
       }
     } else {
       $('countdown-num').textContent = n;
     }
-  }, 700);
+  }, soloFast ? 500 : 700);
   }
   updateHudFromPlayer(localPlayer, snap);
   console.log('FPS + LEGO controls locked', { myId, x: localPlayer.x, z: localPlayer.z, weapon: localPlayer.weapon?.id, camY: state.camera?.position.y });
@@ -812,6 +870,14 @@ function wireSocketEvents(sock) {
 
   sock.on('shot', (result) => {
     spawnTracer(result.origin, result.dir);
+    if (result.hit && room?.players) {
+      const target = room.players.find((p) => p.id === result.hit.id);
+      if (target) {
+        target.hp = result.hit.hp;
+        if (result.killed) target.alive = false;
+      }
+      syncPlayers(room.players);
+    }
     if (result.hit && result.hit.id === myId && localPlayer) {
       localPlayer.hp = result.hit.hp;
       if (result.killed) {
@@ -958,7 +1024,7 @@ function updateLocal(dt) {
 
   const ctrl = state.controls;
   if (!ctrl.enabled || !localPlayer.alive) {
-    applyFpsCamera();
+    applyPlayerCamera();
     if (state.viewmodel) state.viewmodel.visible = !!localPlayer.alive;
     updateHudFromPlayer(localPlayer, room);
     return;
@@ -988,42 +1054,74 @@ function updateLocal(dt) {
     localPlayer.z += (forward.z * my + right.z * mx) * speed * dt;
   }
 
-  // Jump
-  if (ctrl.consumePress('jump') && state.onGround && !localPlayer.prone) {
-    state.velocityY = 7;
-    state.onGround = false;
+  // Double jump: lần 2 cao gấp đôi lần 1 · leo tường / lên nóc
+  if (ctrl.consumePress('jump') && !localPlayer.prone) {
+    if (state.onGround) {
+      state.velocityY = JUMP_VEL_FIRST;
+      state.onGround = false;
+      state.jumpCount = 1;
+    } else if (state.jumpCount < 2) {
+      state.velocityY = JUMP_VEL_DOUBLE;
+      state.jumpCount = 2;
+    }
   }
   state.velocityY -= 18 * dt;
   localPlayer.y += state.velocityY * dt;
-  if (localPlayer.y <= 0) {
-    localPlayer.y = 0;
-    state.velocityY = 0;
-    state.onGround = true;
-  }
 
-  // Bounds + collision
+  // Bounds + collision (roofs + walls)
   const b = state.mapData.bounds;
   localPlayer.x = Math.max(b.minX, Math.min(b.maxX, localPlayer.x));
   localPlayer.z = Math.max(b.minZ, Math.min(b.maxZ, localPlayer.z));
   const pos = new THREE.Vector3(localPlayer.x, localPlayer.y, localPlayer.z);
-  resolveCollision(pos, 0.35, localPlayer.prone ? 0.6 : 1.7, state.mapData.colliders);
-  localPlayer.x = pos.x;
-  localPlayer.z = pos.z;
+  const col = resolveCollision(pos, 0.35, localPlayer.prone ? 0.6 : 1.7, state.mapData.colliders, state.velocityY);
+  localPlayer.x = col.pos.x;
+  localPlayer.z = col.pos.z;
 
-  // Character body hidden in FPS — you look through their eyes
+  // Wall climb / mantle onto roof
+  if (!state.onGround && col.wallContact && (ctrl.jump || mx || my)) {
+    if (col.wallContact.canMantle) {
+      localPlayer.y = col.wallContact.topY;
+      state.velocityY = 0;
+      state.onGround = true;
+      state.jumpCount = 0;
+    } else if (ctrl.jump || state.jumpCount > 0) {
+      state.velocityY = Math.max(state.velocityY, 6.2);
+    }
+  }
+
+  if (col.grounded) {
+    localPlayer.y = col.pos.y;
+    state.velocityY = 0;
+    state.onGround = true;
+    state.jumpCount = 0;
+  } else if (localPlayer.y <= 0) {
+    localPlayer.y = 0;
+    state.velocityY = 0;
+    state.onGround = true;
+    state.jumpCount = 0;
+  }
+
+  // Character body — ẩn FPS, hiện 3rd person (súng trên tay)
   const ch = state.characters.get(myId);
   if (ch) {
     ch.position.set(localPlayer.x, localPlayer.y, localPlayer.z);
     ch.rotation.y = localPlayer.yaw;
     animateCharacter(ch, !!(mx || my), dt, localPlayer.prone);
-    ch.visible = false;
+    ch.visible = !!state.thirdPerson;
+    const mount = ch.userData.weaponMount;
+    const wid = localPlayer.weapon?.id;
+    if (state.thirdPerson && wid && wid !== 'FIST' && mount.userData.wid !== wid) {
+      while (mount.children.length) mount.remove(mount.children[0]);
+      mount.add(createWeaponMesh(wid));
+      mount.userData.wid = wid;
+    }
   }
 
-  applyFpsCamera();
+  applyPlayerCamera();
 
-  // Gun in hands (FPS viewmodel)
-  if (state.viewmodel) state.viewmodel.visible = true;
-  updateViewmodel(localPlayer);
+  // Gun in hands — FPS viewmodel (ẩn khi 3rd person)
+  if (state.viewmodel) state.viewmodel.visible = !state.thirdPerson;
+  if (!state.thirdPerson) updateViewmodel(localPlayer);
 
   // Actions
   if (ctrl.consumePress('reload') && localPlayer.weapon) {
@@ -1048,6 +1146,8 @@ function updateLocal(dt) {
   if (ctrl.consumePress('drone')) {
     msg('Chỉ góc nhìn nhân vật — không dùng camera người xem', 1500);
   }
+
+  if (ctrl.consumePress('viewToggle')) toggleThirdPerson();
 
   // Fire
   const wantFire = ctrl.fire || ctrl.consumePress('fire');
@@ -1097,14 +1197,14 @@ function tryPickup() {
 }
 
 function tryShoot() {
-  if (!state.combatReady) return;
+  if (!state.combatReady && !room?.soloMode) return;
   if (!localPlayer?.weapon || localPlayer.weapon.reloading) return;
   const w = WEAPONS[localPlayer.weapon.id];
   if (!w || (!w.melee && localPlayer.weapon.clip <= 0)) {
     if (localPlayer.weapon?.clip <= 0 && !w?.melee) msg('Hết đạn — nạp đạn!', 1000);
     return;
   }
-  const now = performance.now() / 1000;
+  const now = Date.now() / 1000;
   if (now - (localPlayer.weapon.lastShot || 0) < w.fireRate) return;
   localPlayer.weapon.lastShot = now;
   // Optimistic clip
@@ -1161,7 +1261,7 @@ function toggleDronePeek() {
 function updateDrone(_dt) {
   // No-op — spectator orbit removed during matches
   state.droneMode = false;
-  if (localPlayer && state.playing) applyFpsCamera();
+  if (localPlayer && state.playing) applyPlayerCamera();
 }
 
 function updateTracers(dt) {
@@ -1203,12 +1303,12 @@ function loop() {
     state.droneMode = false;
     state.screen = 'playing';
     ensureLocalPlayer();
-    applyFpsCamera();
+    applyPlayerCamera();
     updateLocal(dt);
-    applyFpsCamera();
+    applyPlayerCamera();
     if (isStuckSpectatorView()) {
       console.warn('Spectator watchdog', getCameraWorldY(), getCameraLookDir());
-      applyFpsCamera();
+      applyPlayerCamera();
     }
   } else if (
     !hudActive &&
@@ -1396,7 +1496,7 @@ function bindUI() {
     if (state.playing || room?.state === 'playing') {
       state.screen = 'playing';
       ensureLocalPlayer();
-      applyFpsCamera();
+      applyPlayerCamera();
       if (isStuckSpectatorView()) {
         msg('Đã khóa góc nhìn nhân vật', 1500);
       }
@@ -1439,6 +1539,8 @@ window.__GAME_DEBUG__ = () => ({
   hud: !$('game-hud')?.classList.contains('hidden'),
   controlsEnabled: state.controls?.enabled,
   ctrlMove: state.controls ? { x: state.controls.move.x, y: state.controls.move.y } : null,
+  thirdPerson: state.thirdPerson,
+  jumpCount: state.jumpCount,
 });
 setTimeout(() => {
   if (!socket && $('conn-status') && !$('conn-status').textContent) {

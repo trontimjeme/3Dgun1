@@ -18,6 +18,7 @@ export class Controls {
     this.pickup = false;
     this.pickupPressed = false;
     this.switchWeaponPressed = false;
+    this.viewTogglePressed = false;
     this.ads = false;
     this.scopeLevel = 0; // 0 off, 1 mid, 2 max (like reference)
     this.prone = false;
@@ -51,6 +52,7 @@ export class Controls {
       if (k === 'KeyR') this.reloadPressed = true;
       if (k === 'KeyQ') this.pickupPressed = true;
       if (k === 'KeyV') this.switchWeaponPressed = true;
+      if (k === 'KeyH') this.viewTogglePressed = true;
       if (k === 'KeyC') this.prone = !this.prone;
       if (k === 'KeyM') this.dronePressed = true;
       if (k === 'KeyG') this._cycleScope();
@@ -298,6 +300,7 @@ export class Controls {
     bind('btn-prone', () => { this.prone = !this.prone; });
     bind('btn-sprint', () => { this.sprinting = true; }, () => { this.sprinting = false; });
     bind('btn-drone-cam', () => { this.dronePressed = true; });
+    bind('btn-third-person', () => { this.viewTogglePressed = true; });
   }
 
   update() {

@@ -71,6 +71,7 @@ export function createLocalSocket() {
     if (tickInterval) clearInterval(tickInterval);
     tickInterval = setInterval(() => {
       if (!room || room.state !== 'playing') return;
+      if (room.combatAt && Date.now() >= room.combatAt) room.combatAt = null;
       for (const p of room.players.values()) {
         if (p.weapon?.reloading) room.finishReload(p.id);
       }
@@ -107,7 +108,7 @@ export function createLocalSocket() {
     clearTimers();
     room.startRound(SPAWNS, CRATE_SPOTS);
     room.beginPlaying();
-    room.combatAt = Date.now() + 2100;
+    room.combatAt = Date.now() + (room.soloMode ? 600 : 2100);
     startTick();
     return room.snapshot();
   }
@@ -151,7 +152,6 @@ export function createLocalSocket() {
     }
 
     if (event === 'player:shoot') {
-      // Freeze combat until countdown ends (both sides enter together)
       if (room.combatAt && Date.now() < room.combatAt) return;
       const result = room.tryShoot(id, data?.origin, data?.dir, data?.hitPlayerId);
       if (!result) return;
