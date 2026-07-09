@@ -395,18 +395,34 @@ function showLegoControls() {
 
 function startPlaying(snap) {
   if (!ensureThree()) return;
+  if (!snap) return;
+
+  // Already in character POV for this match — refresh HUD/camera only
+  if (state.playing && localPlayer && !state.droneMode) {
+    room = snap;
+    state.droneMode = false;
+    if (state.controls) state.controls.enabled = true;
+    showLegoControls();
+    applyFpsCamera();
+    updateViewmodel(localPlayer);
+    updateHudFromPlayer(localPlayer, snap);
+    return;
+  }
 
   // Force character POV — never stay in spectator/drone
   state.droneMode = false;
   state.playing = true;
   state.thirdPerson = false;
-  state.controls.enabled = true;
-  state.controls.scopeLevel = 0;
-  state.controls.ads = false;
+  if (state.controls) {
+    state.controls.enabled = true;
+    state.controls.scopeLevel = 0;
+    state.controls.ads = false;
+  }
   state.combatReady = false;
 
   document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
   $('click-hint')?.classList.add('hidden');
+  $('result-overlay')?.classList.add('hidden');
   showLegoControls();
 
   room = snap;
@@ -422,10 +438,10 @@ function startPlaying(snap) {
   myId = me.id;
   localPlayer = {
     ...me,
-    x: me.x ?? 0,
+    x: Number.isFinite(me.x) ? me.x : 0,
     y: me.y || 0,
-    z: me.z ?? 14,
-    yaw: me.yaw ?? Math.PI,
+    z: Number.isFinite(me.z) ? me.z : 14,
+    yaw: Number.isFinite(me.yaw) ? me.yaw : Math.PI,
     pitch: me.pitch || 0,
     loadout: me.loadout,
     weapon: me.weapon,
@@ -452,14 +468,17 @@ function startPlaying(snap) {
     $('click-hint')?.classList.remove('hidden');
   }
 
+  // Avoid stacking multiple countdowns if startPlaying is called twice
+  if (state._countdownIv) clearInterval(state._countdownIv);
   let n = 3;
   $('countdown-overlay').classList.remove('hidden');
   $('countdown-num').textContent = n;
-  const iv = setInterval(() => {
-    if (!state.playing) { clearInterval(iv); return; }
+  state._countdownIv = setInterval(() => {
+    if (!state.playing) { clearInterval(state._countdownIv); return; }
     n--;
     if (n <= 0) {
-      clearInterval(iv);
+      clearInterval(state._countdownIv);
+      state._countdownIv = null;
       $('countdown-overlay').classList.add('hidden');
       state.combatReady = true;
       msg('BẠN LÀ NHÂN VẬT — joystick / WASD · nhìn · BẮN', 4000);
@@ -493,10 +512,27 @@ function wireSocketEvents(sock) {
   });
 
   sock.on('game:tick', (data) => {
-    if (!state.playing) return;
+    // Auto-recover: match is running on host but client never entered FPS (spectator bug)
+    if (!state.playing) {
+      if (data?.players?.length && (data.state === 'playing' || room?.state === 'playing' || data.timer != null)) {
+        console.warn('Recover FPS from game:tick — client was stuck in spectator');
+        const snap = {
+          ...(room || {}),
+          state: 'playing',
+          timer: data.timer,
+          players: data.players,
+          crates: data.crates || room?.crates || [],
+          scores: room?.scores || { CT: 0, T: 0 },
+          soloMode: room?.soloMode,
+        };
+        startPlaying(snap);
+      }
+      return;
+    }
     state.droneMode = false;
     if (room) {
       room.timer = data.timer;
+      room.state = 'playing';
       if (data.players) room.players = data.players;
       if (data.crates) room.crates = data.crates;
     }
@@ -597,29 +633,26 @@ function useLocalMode(reason) {
 }
 
 function connectSocket() {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const url = (window.GAME_SERVER_URL || '').trim();
 
-    // No remote server configured (typical on Vercel static) → offline bots
-    if (!url && typeof io === 'undefined') {
-      useLocalMode('Chế độ offline — chơi bot không cần server').then(resolve);
+    // Vercel / static: never probe same-origin Socket.io (it hangs and never starts FPS).
+    // Only connect remotely when GAME_SERVER_URL is explicitly set.
+    if (!url) {
+      useLocalMode('Chế độ offline (bot) — sẵn sàng').then(resolve);
       return;
     }
 
-    if (!url) {
-      // Same-origin: try local Node server first, fall back to offline
-      try {
-        socket = io({ transports: ['websocket', 'polling'], timeout: 2500, reconnection: false });
-      } catch (e) {
-        useLocalMode('Chế độ offline — chơi bot').then(resolve);
-        return;
-      }
-    } else {
-      if (typeof io === 'undefined') {
-        useLocalMode('Thiếu Socket.io client — dùng offline bot').then(resolve);
-        return;
-      }
+    if (typeof io === 'undefined') {
+      useLocalMode('Thiếu Socket.io — dùng offline bot').then(resolve);
+      return;
+    }
+
+    try {
       socket = io(url, { transports: ['websocket', 'polling'], timeout: 4000, reconnection: false });
+    } catch (e) {
+      useLocalMode('Không kết nối được server — offline bot').then(resolve);
+      return;
     }
 
     let settled = false;
@@ -640,7 +673,7 @@ function connectSocket() {
 
     socket.on('connect', ok);
     socket.on('connect_error', fail);
-    setTimeout(fail, 3000);
+    setTimeout(fail, 2500);
   });
 }
 
@@ -984,15 +1017,9 @@ function bindUI() {
         }
         myId = socket.id;
         room = res.room;
-        updateLobbyUI(res.room);
         $('conn-status').textContent = 'Bot 5v5 — góc nhìn nhân vật';
-        // Force FPS if round:start is delayed
-        setTimeout(() => {
-          if (!state.playing && res.room?.players?.length) {
-            socket.emit('round:skipDrone');
-            if (!state.playing) startPlaying({ ...res.room, state: 'playing', crates: res.room.crates || [] });
-          }
-        }, 600);
+        // Enter FPS immediately from ack (do not wait for round:start)
+        startPlaying(res.room);
       });
     } catch (err) {
       btn.disabled = false;
@@ -1019,39 +1046,8 @@ function bindUI() {
         myId = socket.id;
         room = res.room;
         $('conn-status').textContent = '1 vs 10 — góc nhìn nhân vật';
-        // Safety: if round:start missed, force FPS quickly
-        setTimeout(() => {
-          if (!state.playing && res.room?.players?.length) {
-            console.warn('Force FPS start from room callback');
-            socket.emit('round:skipDrone');
-            if (!state.playing) {
-              const snap = {
-                ...res.room,
-                state: 'playing',
-                players: res.room.players.map((p) => {
-                  if (p.id === myId || !p.isBot) {
-                    return {
-                      ...p,
-                      x: 0, y: 0, z: 14, yaw: Math.PI,
-                      weapon: p.weapon || { id: 'AWP', clip: 5, reserve: 20, lastShot: 0, reloading: false },
-                      loadout: p.loadout || {
-                        slots: [
-                          { id: 'AWP', clip: 5, reserve: 20, lastShot: 0, reloading: false },
-                          { id: 'AK47', clip: 30, reserve: 90, lastShot: 0, reloading: false },
-                        ],
-                        active: 0,
-                      },
-                    };
-                  }
-                  return p;
-                }),
-                soloMode: true,
-                crates: res.room.crates || [],
-              };
-              startPlaying(snap);
-            }
-          }
-        }, 500);
+        // Enter FPS immediately — ack already includes spawned snapshot
+        startPlaying(res.room);
       });
     } catch (err) {
       btn.disabled = false;
