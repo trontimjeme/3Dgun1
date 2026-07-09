@@ -1,0 +1,12 @@
+{
+  "name": "gametrontim-maps",
+  "version": "1.0.0",
+  "description": "Map modules for GameTrontim — copy từ 3Dgun1 + map mới",
+  "type": "module",
+  "main": "maps/index.js",
+  "keywords": ["threejs", "fps", "map"],
+  "license": "ISC",
+  "peerDependencies": {
+    "three": ">=0.170.0"
+  }
+}
