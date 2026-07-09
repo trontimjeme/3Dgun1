@@ -392,8 +392,9 @@ function ensureLocalPlayer(players) {
     localPlayer.alive = me.alive;
     if (me.weapon) localPlayer.weapon = me.weapon;
     if (me.loadout) localPlayer.loadout = me.loadout;
-    // Sandbox: local sim owns position — don't snap back to static room snapshot
-    if (!state.sandboxMode) {
+    // Local human owns transform while playing — snapping from room snapshot blocks movement
+    const localControl = state.playing && me.id === myId && !me.isBot;
+    if (!localControl && !state.sandboxMode) {
       if (Number.isFinite(me.x)) localPlayer.x = me.x;
       if (Number.isFinite(me.y)) localPlayer.y = me.y;
       if (Number.isFinite(me.z)) localPlayer.z = me.z;
@@ -1052,7 +1053,7 @@ function updateLocal(dt) {
   const wantFire = ctrl.fire || ctrl.consumePress('fire');
   if (wantFire) tryShoot();
 
-  // Sync to server (skip in offline sandbox)
+  // Sync transform to server + keep room snapshot in sync for local player
   if (!state.sandboxMode) {
     socket?.emit('player:update', {
       x: localPlayer.x,
@@ -1064,17 +1065,20 @@ function updateLocal(dt) {
       ads: localPlayer.ads,
       sprinting: localPlayer.sprinting,
     });
-  } else if (room?.players?.length) {
-    const me = room.players.find((p) => p.id === myId) || room.players[0];
-    me.x = localPlayer.x;
-    me.y = localPlayer.y;
-    me.z = localPlayer.z;
-    me.yaw = localPlayer.yaw;
-    me.pitch = localPlayer.pitch;
-    me.prone = localPlayer.prone;
-    me.ads = localPlayer.ads;
-    me.sprinting = localPlayer.sprinting;
-    if (localPlayer.weapon) me.weapon = localPlayer.weapon;
+  }
+  if (room?.players?.length) {
+    const me = room.players.find((p) => p.id === myId);
+    if (me) {
+      me.x = localPlayer.x;
+      me.y = localPlayer.y;
+      me.z = localPlayer.z;
+      me.yaw = localPlayer.yaw;
+      me.pitch = localPlayer.pitch;
+      me.prone = localPlayer.prone;
+      me.ads = localPlayer.ads;
+      me.sprinting = localPlayer.sprinting;
+      if (localPlayer.weapon) me.weapon = localPlayer.weapon;
+    }
   }
 
   updateHudFromPlayer(localPlayer, room);
