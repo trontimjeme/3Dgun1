@@ -7,7 +7,11 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node server/index.js",
-    "server": "node server/index.js"
+    "server": "node server/index.js",
+    "stop": "node -e \"const {execSync}=require('child_process'); try{execSync('fuser -k 3000/tcp',{stdio:'inherit'})}catch(e){}\""
+  },
+  "engines": {
+    "node": ">=18"
   },
   "repository": {
     "type": "git",

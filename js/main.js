@@ -123,7 +123,18 @@ function updateHudFromPlayer(p, snap) {
 
 // ——— Three.js setup ———
 function initThree() {
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+  let renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      powerPreference: 'high-performance',
+      failIfMajorPerformanceCaveat: false,
+    });
+  } catch (e) {
+    // Fallback without antialias (some GPUs / remote desktops)
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: false, failIfMajorPerformanceCaveat: false });
+  }
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setSize(innerWidth, innerHeight);
   renderer.shadowMap.enabled = true;
@@ -707,17 +718,28 @@ function bindUI() {
   };
 
   $('btn-bot-game').onclick = async () => {
+    const btn = $('btn-bot-game');
+    btn.disabled = true;
+    $('conn-status').textContent = 'Đang kết nối server...';
     try {
       await ensureConnected();
       socket.emit('room:bot', { name: playerName() }, (res) => {
-        if (!res?.ok) return alert(res?.error || 'Lỗi');
+        btn.disabled = false;
+        if (!res?.ok) {
+          $('conn-status').textContent = res?.error || 'Lỗi tạo phòng bot';
+          return alert(res?.error || 'Lỗi');
+        }
         myId = socket.id;
         room = res.room;
         updateLobbyUI(res.room);
+        $('conn-status').textContent = 'Đã vào phòng bot — chờ drone...';
         msg('Đang vào trận với bot...', 2000);
       });
-    } catch {
-      alert('Không kết nối được server. Chạy: npm start');
+    } catch (err) {
+      btn.disabled = false;
+      console.error(err);
+      $('conn-status').textContent = 'Không kết nối được. Chạy: npm start rồi mở http://localhost:3000';
+      alert('Không kết nối được server.\n\n1) Mở terminal trong thư mục game\n2) Chạy: npm install && npm start\n3) Mở trình duyệt: http://localhost:3000\n\n(Không mở file index.html trực tiếp)');
     }
   };
 
@@ -784,10 +806,19 @@ function ensureConnected() {
 }
 
 // ——— Boot ———
-initThree();
 bindUI();
 showScreen('main-menu');
 setHud(false);
-loop();
 
-console.log('Block Tactical 5v5 ready');
+try {
+  initThree();
+  loop();
+  console.log('Block Tactical 5v5 ready');
+} catch (err) {
+  console.error(err);
+  const status = $('conn-status');
+  if (status) {
+    status.textContent = 'Lỗi WebGL / khởi tạo 3D. Hãy dùng Chrome/Edge và mở http://localhost:PORT (sau npm start).';
+  }
+  alert('Không tạo được WebGL. Mở game qua http://localhost sau khi chạy npm start (không mở file HTML trực tiếp).');
+}

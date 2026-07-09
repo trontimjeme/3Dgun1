@@ -354,7 +354,28 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = process.env.PORT || 3000;
-httpServer.listen(PORT, () => {
-  console.log(`Block Tactical 5v5 → http://localhost:${PORT}`);
-});
+const PORT = Number(process.env.PORT) || 3000;
+
+function tryListen(port, attemptsLeft = 10) {
+  const onError = (err) => {
+    httpServer.off('listening', onListening);
+    if (err.code === 'EADDRINUSE' && attemptsLeft > 0) {
+      console.warn(`Port ${port} đang bận — thử port ${port + 1}...`);
+      // Must close before re-listen on some Node versions
+      httpServer.close(() => tryListen(port + 1, attemptsLeft - 1));
+      return;
+    }
+    console.error('Không khởi động được server:', err.message);
+    process.exit(1);
+  };
+  const onListening = () => {
+    httpServer.off('error', onError);
+    console.log(`Block Tactical 5v5 → http://localhost:${port}`);
+    console.log('Mở link trên bằng trình duyệt (không mở file index.html trực tiếp).');
+  };
+  httpServer.once('error', onError);
+  httpServer.once('listening', onListening);
+  httpServer.listen(port);
+}
+
+tryListen(PORT);
