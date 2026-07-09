@@ -192,7 +192,11 @@ function initThree() {
   const mapData = buildMap(scene);
 
   const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 200);
-  camera.position.set(0, 40, 50);
+  // Start at ground-level spawn — never leave initial camera at aerial height
+  camera.position.set(0, 1.65, 14);
+  camera.rotation.order = 'YXZ';
+  camera.rotation.y = Math.PI;
+  camera.rotation.x = 0;
 
   state.renderer = renderer;
   state.scene = scene;
@@ -359,8 +363,12 @@ function findMe(players) {
 /** Bind or refresh localPlayer from the latest room snapshot. */
 function ensureLocalPlayer(players) {
   const list = players || room?.players;
-  const me = findMe(list);
-  if (!me) return null;
+  const me = list?.length ? findMe(list) : null;
+
+  if (!me) {
+    // Keep existing controllable character if room snapshot momentarily lacks players
+    return localPlayer || null;
+  }
 
   if (!localPlayer || localPlayer.id !== me.id) {
     myId = me.id;
@@ -392,19 +400,31 @@ function ensureLocalPlayer(players) {
   return localPlayer;
 }
 
+/** Who the camera should follow — never null during a live match. */
+function getPlayerForCamera() {
+  return ensureLocalPlayer() || localPlayer || {
+    x: 0, y: 0, z: 14, yaw: Math.PI, pitch: 0, prone: false,
+  };
+}
+
 function applyFpsCamera() {
   if (!state.camera) return;
-  const p = ensureLocalPlayer();
-  if (!p) return;
 
+  const p = getPlayerForCamera();
   const eye = p.prone ? 0.45 : 1.65;
   state.eyeHeight = eye;
-  const yaw = p.yaw || 0;
+  const yaw = p.yaw ?? Math.PI;
   const pitch = p.pitch || 0;
+  const px = Number.isFinite(p.x) ? p.x : 0;
   const py = p.y || 0;
+  const pz = Number.isFinite(p.z) ? p.z : 14;
 
-  // FPS: camera stays OUTSIDE scene graph (never parented to scene)
-  state.camera.position.set(p.x, py + eye, p.z);
+  // FPS: camera is NEVER in the scene graph
+  if (state.scene?.children.includes(state.camera)) {
+    state.scene.remove(state.camera);
+  }
+
+  state.camera.position.set(px, py + eye, pz);
   state.camera.rotation.order = 'YXZ';
   state.camera.rotation.y = yaw;
   state.camera.rotation.x = pitch;
@@ -420,6 +440,18 @@ function applyFpsCamera() {
 
 function isStuckSpectatorView() {
   return state.camera && state.camera.position.y > 6;
+}
+
+/** Single entry: match started → you control the character in first-person. */
+function enterPlayerView(snap) {
+  if (snap) room = snap;
+  state.droneMode = false;
+  state.playing = true;
+  state.screen = 'playing';
+  if (state.controls) state.controls.enabled = true;
+  showLegoControls();
+  ensureLocalPlayer(snap?.players);
+  applyFpsCamera();
 }
 
 function showLegoControls() {
@@ -454,12 +486,7 @@ function startPlaying(snap) {
   // Already in character POV for this match — refresh HUD/camera only
   if (state.playing && localPlayer && !state.droneMode) {
     room = snap;
-    state.screen = 'playing';
-    state.droneMode = false;
-    if (state.controls) state.controls.enabled = true;
-    showLegoControls();
-    ensureLocalPlayer(snap.players);
-    applyFpsCamera();
+    enterPlayerView(snap);
     updateViewmodel(localPlayer);
     updateHudFromPlayer(localPlayer, snap);
     return;
@@ -510,6 +537,7 @@ function startPlaying(snap) {
   }
 
   applyFpsCamera();
+  enterPlayerView(snap);
   if (state.viewmodel) state.viewmodel.visible = true;
   updateViewmodel(localPlayer);
 
@@ -549,37 +577,37 @@ function wireSocketEvents(sock) {
   sock.on('chat', addChat);
 
   sock.on('round:drone', (snap) => {
-    // Drone disabled — treat as immediate FPS start
     document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
-    room = snap;
     startPlaying(snap);
   });
 
   sock.on('round:start', (snap) => {
     document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
-    room = snap;
     startPlaying(snap);
   });
 
   sock.on('game:tick', (data) => {
-    // Auto-recover: match is running on host but client never entered FPS (spectator bug)
-    if (!state.playing) {
-      if (data?.players?.length && (data.state === 'playing' || room?.state === 'playing' || data.timer != null)) {
-        console.warn('Recover FPS from game:tick — client was stuck in spectator');
-        const snap = {
-          ...(room || {}),
-          state: 'playing',
-          timer: data.timer,
-          players: data.players,
-          crates: data.crates || room?.crates || [],
-          scores: room?.scores || { CT: 0, T: 0 },
-          soloMode: room?.soloMode,
-        };
-        startPlaying(snap);
-      }
+    const matchRunning = data?.state === 'playing' || room?.state === 'playing' || data?.timer != null;
+
+    if (!state.playing && matchRunning && data?.players?.length) {
+      console.warn('Recover player POV from game:tick');
+      startPlaying({
+        ...(room || {}),
+        state: 'playing',
+        timer: data.timer,
+        players: data.players,
+        crates: data.crates || room?.crates || [],
+        scores: room?.scores || { CT: 0, T: 0 },
+        soloMode: room?.soloMode,
+      });
       return;
     }
+
+    if (!state.playing) return;
+
     state.droneMode = false;
+    enterPlayerView();
+
     if (room) {
       room.timer = data.timer;
       room.state = 'playing';
@@ -1004,18 +1032,22 @@ function loop() {
   const matchLive = state.playing || room?.state === 'playing' || hudActive;
 
   if (matchLive) {
+    // RULE: during a match the camera is ALWAYS first-person — never menu/drone orbit
     state.playing = true;
     state.droneMode = false;
     state.screen = 'playing';
     ensureLocalPlayer();
+    applyFpsCamera(); // apply BEFORE movement so we never render one frame at orbit height
     updateLocal(dt);
-    applyFpsCamera();
-    // Watchdog: never stay on menu/spectator height during a match
+    applyFpsCamera(); // apply AFTER movement
     if (isStuckSpectatorView()) {
-      console.warn('Spectator camera watchdog — forcing FPS', state.camera.position.y);
+      console.warn('Spectator watchdog — forcing player POV', state.camera.position.y);
       applyFpsCamera();
     }
-  } else if (state.screen === 'main-menu' || state.screen === 'menu' || state.screen === 'join-screen' || state.screen === 'lobby-screen') {
+  } else if (
+    !hudActive &&
+    (state.screen === 'main-menu' || state.screen === 'menu' || state.screen === 'join-screen' || state.screen === 'lobby-screen')
+  ) {
     state.droneAngle += dt * 0.15;
     state.camera.position.set(Math.cos(state.droneAngle) * 48, 28, Math.sin(state.droneAngle) * 48);
     state.camera.rotation.set(0, 0, 0);
